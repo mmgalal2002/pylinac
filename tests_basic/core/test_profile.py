@@ -6,6 +6,7 @@ from unittest import TestCase
 
 import numpy as np
 import scipy.signal as sps
+from parameterized import parameterized
 from scipy.ndimage import zoom
 
 from pylinac.core import image
@@ -20,6 +21,7 @@ from pylinac.core.image_generator import (
 from pylinac.core.image_generator.layers import Layer
 from pylinac.core.image_generator.simulators import Simulator
 from pylinac.core.profile import (
+    Centering,
     CircleProfile,
     CollapsedCircleProfile,
     FWXMProfile,
@@ -33,6 +35,13 @@ from pylinac.core.profile import (
     Normalization,
     SingleProfile,
     stretch,
+)
+from pylinac.field_analysis import (
+    flatness_dose_difference,
+    flatness_dose_ratio,
+    symmetry_area,
+    symmetry_pdq_iec,
+    symmetry_point_difference,
 )
 from pylinac.metrics.profile import (
     PDD,
@@ -49,6 +58,8 @@ from pylinac.metrics.profile import (
     TopDistanceMetric,
 )
 from tests_basic.utils import get_file_from_cloud_test_repo
+
+from .profile_regression_fixtures import PROFILE_REGRESSION_FIXTURES
 
 
 def generate_open_field(
@@ -2105,6 +2116,34 @@ class SingleProfileTests(TestCase):
         field_data = p.field_data()
         self.assertEqual(field_data["field values"][0], field_data["field values"][-1])
 
+    def test_field_data_with_physical_x_values_uses_coordinate_space(self):
+        """field_data should fit top/slope windows using passed x-values."""
+        x = np.arange(-7.4, 7.4001, 0.05)
+        y = 100 * np.exp(-((x / 3) ** 4))
+        for interpolation in (
+            Interpolation.NONE,
+            Interpolation.LINEAR,
+            Interpolation.SPLINE,
+        ):
+            with self.subTest(interpolation=interpolation):
+                p = SingleProfile(
+                    y,
+                    x_values=x,
+                    normalization_method=Normalization.NONE,
+                    interpolation=interpolation,
+                )
+
+                field_data = p.field_data()
+
+                self.assertGreater(
+                    field_data["right inner index (exact)"],
+                    field_data["left inner index (exact)"],
+                )
+                self.assertTrue(np.isfinite(field_data["left slope"]))
+                self.assertTrue(np.isfinite(field_data["right slope"]))
+                self.assertEqual(len(field_data["top params"]), 3)
+                self.assertTrue(np.all(np.isfinite(field_data["top params"])))
+
     def test_geometric_center(self):
         # centered field
         field = generate_open_field()
@@ -2298,6 +2337,354 @@ class SingleProfileTests(TestCase):
         )
         with self.assertRaises(ValueError):
             reference.gamma(evaluation)
+
+    def test_centering_default_is_beam_center(self):
+        """Default centering should be BEAM_CENTER for backwards compatibility."""
+        field = generate_open_field()
+        p = SingleProfile(
+            field.image[:, int(field.shape[1] / 2)], interpolation=Interpolation.NONE
+        )
+        self.assertEqual(p._centering, Centering.BEAM_CENTER)
+
+    def test_centering_accepts_enum(self):
+        """Centering parameter should accept Centering enum."""
+        field = generate_open_field()
+        p = SingleProfile(
+            field.image[:, int(field.shape[1] / 2)],
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+        self.assertEqual(p._centering, Centering.GEOMETRIC_CENTER)
+
+    def test_centering_accepts_string(self):
+        """Centering parameter should accept string value."""
+        field = generate_open_field()
+        p = SingleProfile(
+            field.image[:, int(field.shape[1] / 2)],
+            interpolation=Interpolation.NONE,
+            centering="Geometric center",
+        )
+        self.assertEqual(p._centering, Centering.GEOMETRIC_CENTER)
+
+    def test_centering_beam_center_uses_beam_center_for_field_data(self):
+        """With BEAM_CENTER, field_data() should extract field around beam center."""
+        # Create an offset field (beam center != geometric center)
+        field = generate_open_field(center=(20, 20))
+        p = SingleProfile(
+            field.image[:, int(field.shape[1] / 2)],
+            interpolation=Interpolation.NONE,
+            centering=Centering.BEAM_CENTER,
+        )
+        field_data = p.field_data()
+        beam_center = p.beam_center()["index (exact)"]
+        geo_center = p.geometric_center()["index (exact)"]
+        # Verify exact values for offset field with center=(20, 20)
+        self.assertAlmostEqual(beam_center, 435, delta=1)
+        self.assertAlmostEqual(geo_center, 383.5, delta=0.5)
+        self.assertAlmostEqual(field_data["left index (exact)"], 332, delta=1)
+        self.assertAlmostEqual(field_data["right index (exact)"], 537, delta=1)
+
+    def test_centering_geometric_center_uses_geometric_center_for_field_data(self):
+        """With GEOMETRIC_CENTER, field_data() should extract field around geometric center."""
+        # Create an offset field (beam center != geometric center)
+        field = generate_open_field(center=(20, 20))
+        p = SingleProfile(
+            field.image[:, int(field.shape[1] / 2)],
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+        field_data = p.field_data()
+        geo_center = p.geometric_center()["index (exact)"]
+        # Verify exact values for offset field with center=(20, 20)
+        self.assertAlmostEqual(geo_center, 383.5, delta=0.5)
+        self.assertAlmostEqual(field_data["left index (exact)"], 281, delta=1)
+        self.assertAlmostEqual(field_data["right index (exact)"], 486, delta=1)
+
+    def test_centering_produces_different_field_values_for_offset_profile(self):
+        """For an offset profile, different centering should produce different field values."""
+        # Create an offset field
+        field = generate_open_field(center=(20, 20))
+        profile_data = field.image[:, int(field.shape[1] / 2)]
+
+        p_beam = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.BEAM_CENTER,
+        )
+        p_geo = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+
+        field_data_beam = p_beam.field_data()
+        field_data_geo = p_geo.field_data()
+
+        # Verify exact values differ for offset field with center=(20, 20)
+        self.assertAlmostEqual(field_data_beam["left index (exact)"], 332, delta=1)
+        self.assertAlmostEqual(field_data_beam["right index (exact)"], 537, delta=1)
+        self.assertAlmostEqual(field_data_geo["left index (exact)"], 281, delta=1)
+        self.assertAlmostEqual(field_data_geo["right index (exact)"], 486, delta=1)
+
+    def test_centering_same_for_centered_profile(self):
+        """For a centered profile, both centering methods should give identical results."""
+        # Create a centered field
+        field = generate_open_field(center=(0, 0))
+        profile_data = field.image[:, int(field.shape[1] / 2)]
+
+        p_beam = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.BEAM_CENTER,
+        )
+        p_geo = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+
+        beam_center = p_beam.beam_center()["index (exact)"]
+        geo_center = p_geo.geometric_center()["index (exact)"]
+
+        # For a centered profile, beam center equals geometric center exactly
+        self.assertAlmostEqual(beam_center, 383.5, delta=0.5)
+        self.assertAlmostEqual(geo_center, 383.5, delta=0.5)
+
+    def test_centering_field_region_symmetric_about_chosen_center(self):
+        """Field region should be symmetric about the chosen center point."""
+        # Create an offset field
+        field = generate_open_field(center=(25, 25))
+        profile_data = field.image[:, int(field.shape[1] / 2)]
+
+        # For GEOMETRIC_CENTER, verify exact values for center=(25, 25)
+        p_geo = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+        fd_geo = p_geo.field_data()
+        self.assertAlmostEqual(
+            p_geo.geometric_center()["index (exact)"], 383.5, delta=0.5
+        )
+        self.assertAlmostEqual(fd_geo["left index (exact)"], 281, delta=1)
+        self.assertAlmostEqual(fd_geo["right index (exact)"], 486, delta=1)
+
+        # For BEAM_CENTER, verify exact values for center=(25, 25)
+        p_beam = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.BEAM_CENTER,
+        )
+        fd_beam = p_beam.field_data()
+        self.assertAlmostEqual(p_beam.beam_center()["index (exact)"], 448, delta=1)
+        self.assertAlmostEqual(fd_beam["left index (exact)"], 345, delta=1)
+        self.assertAlmostEqual(fd_beam["right index (exact)"], 550, delta=1)
+
+    def test_centering_field_values_differ_for_offset_beam(self):
+        """For offset beam, field values should differ significantly between centering methods."""
+        field = generate_open_field(center=(30, 30))  # Larger offset
+        profile_data = field.image[:, int(field.shape[1] / 2)]
+
+        p_beam = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.BEAM_CENTER,
+        )
+        p_geo = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+
+        fd_beam = p_beam.field_data(in_field_ratio=0.8)
+        fd_geo = p_geo.field_data(in_field_ratio=0.8)
+
+        # Verify exact values for center=(30, 30) with in_field_ratio=0.8
+        self.assertAlmostEqual(np.mean(fd_beam["field values"]), 1.0, delta=0.05)
+        self.assertAlmostEqual(np.mean(fd_geo["field values"]), 0.74, delta=0.05)
+        self.assertAlmostEqual(fd_beam["left index (exact)"], 358, delta=1)
+        self.assertAlmostEqual(fd_beam["right index (exact)"], 563, delta=1)
+        self.assertAlmostEqual(fd_geo["left index (exact)"], 281, delta=1)
+        self.assertAlmostEqual(fd_geo["right index (exact)"], 486, delta=1)
+
+    def test_centering_affects_symmetry_and_flatness_calculations(self):
+        """Different centering should produce different symmetry and flatness values."""
+        # Create offset field with center=(10, 10)
+        field = generate_open_field(center=(10, 10))
+        profile_data = field.image[:, int(field.shape[1] / 2)]
+
+        p_beam = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.BEAM_CENTER,
+        )
+        p_geo = SingleProfile(
+            profile_data,
+            interpolation=Interpolation.NONE,
+            centering=Centering.GEOMETRIC_CENTER,
+        )
+
+        # Calculate symmetry using point difference method
+        sym_beam = symmetry_point_difference(p_beam, in_field_ratio=0.8)
+        sym_geo = symmetry_point_difference(p_geo, in_field_ratio=0.8)
+
+        # Beam-centered symmetry should be near 0 since beam is the reference
+        # Geometric-centered symmetry should show significant asymmetry
+        self.assertAlmostEqual(sym_beam, -1.1, delta=0.2)
+        self.assertAlmostEqual(sym_geo, -51, delta=1)
+
+        # Calculate flatness using dose difference method
+        flat_beam = flatness_dose_difference(p_beam, in_field_ratio=0.8)
+        flat_geo = flatness_dose_difference(p_geo, in_field_ratio=0.8)
+
+        # Beam-centered flatness should be low (good flatness)
+        # Geometric-centered flatness should be much higher (poor flatness)
+        self.assertAlmostEqual(flat_beam, 1.1, delta=0.1)
+        self.assertAlmostEqual(flat_geo, 33, delta=1)
+
+
+class TestExportedProfileRegressions(TestCase):
+    METRIC_CALCULATORS = {
+        "varian_flatness_difference": flatness_dose_difference,
+        "varian_symmetry_point_difference": symmetry_point_difference,
+        "elekta_flatness_ratio": flatness_dose_ratio,
+        "elekta_symmetry_pdq": symmetry_pdq_iec,
+        "siemens_flatness_difference": flatness_dose_difference,
+        "siemens_symmetry_area": symmetry_area,
+    }
+
+    @staticmethod
+    def _make_profile(
+        fixture,
+        interpolation=Interpolation.NONE,
+        use_x_values: bool = True,
+    ) -> SingleProfile:
+        return SingleProfile(
+            fixture.values,
+            x_values=fixture.x_values if use_x_values else None,
+            interpolation=interpolation,
+        )
+
+    def _assert_metrics(self, fixture, expected: dict, profile: SingleProfile) -> None:
+        for metric_name, expected_value in expected.items():
+            measured_value = self.METRIC_CALCULATORS[metric_name](
+                profile, in_field_ratio=0.8
+            )
+            self.assertAlmostEqual(
+                measured_value,
+                expected_value,
+                delta=1e-9,
+                msg=f"{fixture.name}: {metric_name}",
+            )
+
+    def test_fixture_set_is_mixed_and_uses_physical_spacing(self):
+        self.assertEqual(len(PROFILE_REGRESSION_FIXTURES), 20)
+        self.assertTrue(
+            any("diagonal" in fixture.name for fixture in PROFILE_REGRESSION_FIXTURES)
+        )
+        self.assertTrue(
+            any("mcc" in fixture.name for fixture in PROFILE_REGRESSION_FIXTURES)
+        )
+        self.assertTrue(
+            any("prm" in fixture.name for fixture in PROFILE_REGRESSION_FIXTURES)
+        )
+        self.assertTrue(
+            any(
+                fixture.name.endswith(".snctxt")
+                for fixture in PROFILE_REGRESSION_FIXTURES
+            )
+        )
+        self.assertTrue(
+            any("4A" in fixture.name for fixture in PROFILE_REGRESSION_FIXTURES)
+        )
+        self.assertTrue(
+            any("tomodose" in fixture.name for fixture in PROFILE_REGRESSION_FIXTURES)
+        )
+        self.assertTrue(
+            any(
+                not np.allclose(np.diff(fixture.x_values), np.diff(fixture.x_values)[0])
+                for fixture in PROFILE_REGRESSION_FIXTURES
+            )
+        )
+        self.assertTrue(
+            any(
+                np.isclose(np.diff(fixture.x_values)[0], np.sqrt(2) / 2, atol=1e-12)
+                for fixture in PROFILE_REGRESSION_FIXTURES
+                if len(fixture.x_values) > 1
+            )
+        )
+
+    # --- NONE / with x_values (original test) ---
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_protocol_metrics_match_frozen_exports(self, _: str, fixture):
+        profile = self._make_profile(fixture)
+        self._assert_metrics(fixture, fixture.expected_metrics, profile)
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_field_data_geometry_matches_frozen_exports(self, _: str, fixture):
+        profile = self._make_profile(fixture)
+        field_data = profile.field_data(in_field_ratio=0.8, slope_exclusion_ratio=0.2)
+        for key, expected_value in fixture.expected_field_data.items():
+            self.assertAlmostEqual(
+                field_data[key],
+                expected_value,
+                delta=1e-4,
+                msg=f"{fixture.name}: {key}",
+            )
+
+    # --- LINEAR / with x_values ---
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_protocol_metrics_linear_with_x(self, _: str, fixture):
+        profile = self._make_profile(fixture, interpolation=Interpolation.LINEAR)
+        self._assert_metrics(fixture, fixture.expected_metrics_linear, profile)
+
+    # --- SPLINE / with x_values ---
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_protocol_metrics_spline_with_x(self, _: str, fixture):
+        profile = self._make_profile(fixture, interpolation=Interpolation.SPLINE)
+        self._assert_metrics(fixture, fixture.expected_metrics_spline, profile)
+
+    # --- NONE / without x_values ---
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_protocol_metrics_none_without_x(self, _: str, fixture):
+        profile = self._make_profile(fixture, use_x_values=False)
+        self._assert_metrics(fixture, fixture.expected_metrics_no_x, profile)
+
+    # --- LINEAR / without x_values ---
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_protocol_metrics_linear_without_x(self, _: str, fixture):
+        profile = self._make_profile(
+            fixture, interpolation=Interpolation.LINEAR, use_x_values=False
+        )
+        self._assert_metrics(fixture, fixture.expected_metrics_linear_no_x, profile)
+
+    # --- SPLINE / without x_values ---
+
+    @parameterized.expand(
+        [(fixture.name, fixture) for fixture in PROFILE_REGRESSION_FIXTURES]
+    )
+    def test_protocol_metrics_spline_without_x(self, _: str, fixture):
+        profile = self._make_profile(
+            fixture, interpolation=Interpolation.SPLINE, use_x_values=False
+        )
+        self._assert_metrics(fixture, fixture.expected_metrics_spline_no_x, profile)
 
 
 class MultiProfileTestMixin:

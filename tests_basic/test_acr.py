@@ -1,6 +1,7 @@
 import io
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase, skip
 
 import numpy as np
@@ -90,6 +91,10 @@ class TestCTGeneral(TestCase):
         ct.analyze(origin_slice=3)  # automatic is 2
         self.assertEqual(ct.origin_slice, 3)
 
+    def test_error_if_from_demo(self):
+        with self.assertRaises(NotImplementedError):
+            ACRMRILarge.from_demo_image()
+
 
 class TestPlottingSaving(TestCase):
     @classmethod
@@ -123,6 +128,20 @@ class TestPlottingSaving(TestCase):
         fig = plt.gcf()
         self.assertEqual(fig.bbox_inches.height, 13)
         self.assertEqual(fig.bbox_inches.width, 8)
+
+    def test_save_images_directory_none_uses_cwd(self):
+        original_cwd = Path.cwd()
+        with TemporaryDirectory() as tmpdir:
+            try:
+                os.chdir(tmpdir)
+                paths = self.ct.save_images(directory=None)
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(len(paths), len(self.ct.plot_images(show=False)))
+            for path in paths:
+                self.assertIsInstance(path, Path)
+                self.assertTrue(path.exists())
+                self.assertEqual(path.parent, Path(tmpdir).absolute())
 
 
 class TestACRCTQuaac(QuaacTestBase, CloudFileMixin, TestCase):
@@ -447,6 +466,10 @@ class TestMRGeneral(TestCase):
         mri = ACRMRILarge.from_zip(path)
         self.assertTrue(mri._ensure_physical_scan_extent())
 
+    def test_error_if_from_demo(self):
+        with self.assertRaises(NotImplementedError):
+            ACRMRILarge.from_demo_image()
+
 
 class TestMRPlottingSaving(TestCase):
     @classmethod
@@ -481,6 +504,20 @@ class TestMRPlottingSaving(TestCase):
         self.assertEqual(fig.bbox_inches.height, 13)
         self.assertEqual(fig.bbox_inches.width, 8)
 
+    def test_save_images_directory_none_uses_cwd(self):
+        original_cwd = Path.cwd()
+        with TemporaryDirectory() as tmpdir:
+            try:
+                os.chdir(tmpdir)
+                paths = self.mri.save_images(directory=None)
+            finally:
+                os.chdir(original_cwd)
+            self.assertEqual(len(paths), len(self.mri.plot_images(show=False)))
+            for path in paths:
+                self.assertIsInstance(path, Path)
+                self.assertTrue(path.exists())
+                self.assertEqual(path.parent, Path(tmpdir).absolute())
+
 
 class TestACRMRIQuaac(QuaacTestBase, CloudFileMixin, TestCase):
     dir_path = ["ACR", "MRI"]
@@ -506,6 +543,7 @@ class ACRMRMixin(CloudFileMixin):
     geometric_profile_lengths: None | dict = None
     localizer_profile_lengths: None | dict = None
     low_contrast_score: None | int = None
+    low_contrast_score_per_slice: None | dict = None
     results: list[str] = []
     x_adjustment: float = 0
     y_adjustment: float = 0
@@ -595,6 +633,23 @@ class ACRMRMixin(CloudFileMixin):
         score = results.low_contrast_multi_slice_module.score
         self.assertEqual(score, self.low_contrast_score)
 
+    def test_low_contrast_scores(self):
+        if self.low_contrast_score_per_slice is None:
+            self.skipTest("low_contrast_score_per_slice not available")
+
+        low_contrast_multi_slice_module = (
+            self.mri.results_data().low_contrast_multi_slice_module
+        )
+        low_contrast_rois = low_contrast_multi_slice_module.low_contrast_rois
+
+        for key, value in self.low_contrast_score_per_slice.items():
+            if key not in low_contrast_rois:
+                continue
+
+            expected_score = value
+            actual_score = low_contrast_rois[key].score
+            self.assertEqual(expected_score, actual_score)
+
     def test_results(self):
         results = self.mri.results()
         self.assertIn("ACR MRI Large Results", results)
@@ -673,6 +728,12 @@ class ACRT1Single(ACRMRMixin, PlotlyTestMixin, TestCase):
     slice11_shift = 0
     psg = 0.3
     low_contrast_score = 25
+    low_contrast_score_per_slice = {
+        "slice_8": 2,
+        "slice_9": 8,
+        "slice_10": 8,
+        "slice_11": 7,
+    }
     num_figs = 10
     fig_data = {
         0: {"title": "Slice 1 (Thickness, Offset, Resolution)", "num_traces": 13},
@@ -881,3 +942,22 @@ class ACRMRSagittal(ACRMRMixin, TestCase):
     @skip("For visual inspection only")
     def test_plotly_analyzed_images(self):
         self.mri.plotly_analyzed_images()
+
+
+class ACRMRSagittal2(ACRMRMixin, TestCase):
+    # RAM-5749
+    file_name = "RAM-5749 ACR MR Sag.zip"
+    check_uid = False
+    row_mtf_50 = 0.95
+    col_mtf_50 = 1.04
+    slice_thickness = 0.98
+    slice1_shift = -0.49
+    slice11_shift = 0.0
+    psg = 0.01
+    phantom_roll = 2.08
+    localizer_profile_lengths = {
+        "ROI1": 148.44,
+        "ROI2": 149.42,
+        "ROI3": 149.42,
+        "ROI4": 149.42,
+    }

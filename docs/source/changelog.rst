@@ -10,6 +10,178 @@ Legend
 * :bdg-primary:`Refactor` denotes a code refactor; usually this means an efficiency boost or code cleanup.
 * :bdg-danger:`Change` denotes a change that may break existing code.
 
+v 3.44.0
+--------
+
+CatPhan
+^^^^^^^
+
+* :bdg-warning:`Fixed` CatPhan phantom roll detection no longer raises an error when
+  the roll cannot be determined from the air bubbles. Instead, a ``UserWarning`` is
+  emitted and the roll is set to 0.
+
+ACR Phantoms
+^^^^^^^^^^^^
+
+* :bdg-success:`Feature` :class:`~pylinac.acr.ACRMRILarge` low-contrast detectability
+  results now include per-slice spoke scores in :meth:`~pylinac.acr.ACRMRILarge.results_data`
+  (``low_contrast_multi_slice_module.low_contrast_rois[*].score``).
+
+Planar Imaging
+^^^^^^^^^^^^^^
+
+* :bdg-success:`Feature` Added :class:`~pylinac.planar_imaging.SmallACRMammography`
+  for analyzing the square Small ACR Mammography phantom.
+* :bdg-success:`Feature` Added on-image labels for low- and high-contrast
+  ROIs in planar phantom plots.
+  Labels are shown as ``LC0``, ``LC1``, ... and ``HC0``, ``HC1``, ... on
+  both matplotlib and Plotly overlays, and can be enabled via
+  ``show_roi_labels=True``.  Label font size can be controlled via
+  ``roi_label_font_size``.
+* :bdg-primary:`Fixed` :class:`~pylinac.planar_imaging.DoselabMC2kV` and
+  :class:`~pylinac.planar_imaging.DoselabMC2MV` phantom angle detection now uses a
+  constrained Hough line transform on the detected outline edge mask, improving
+  robustness compared to region-moment orientation. Reported phantom rotation (and
+  any downstream metrics that depend on it) may therefore differ slightly from
+  previous versions.
+
+Helios
+^^^^^^
+
+* :bdg-success:`Feature` The GE Helios CT Daily results model now includes titled
+  top-level sections and additional summary fields in
+  :meth:`~pylinac.helios.GEHeliosCTDaily.results_data`. This includes explicit
+  keys for the contrast-scale water/plastic means, HU difference, water standard
+  deviation, per-pattern high-contrast standard deviations, aggregate low-contrast
+  mean/standard deviation, and summary noise/uniformity values such as center,
+  outer, and center-to-outer HU metrics.
+* :bdg-primary:`Refactor` The default image visualization contrast for GE Helios CT
+  Daily plots has been updated so the analyzed images and side-view rendering use
+  a consistent display window across sections with a higher level of default contrast.
+  These can be changed by setting ``HELIOS_VMIN`` and ``HELIOS_VMAX`` in ``helios.py``.
+
+Nuclear
+^^^^^^^
+
+* :bdg-warning:`Fixed` Four Bar spatial resolution FWHM/FWTM values no longer become
+  negative when the Gaussian curve fit returns a negative standard deviation.
+
+VMAT
+^^^^
+
+* :bdg-warning:`Fixed` The :class:`~pylinac.vmat.DRCS` default spoke labeling
+  convention has been modified, i.e, ``A=150°``, ``B=90°``, ``C=30°``, ``D=330°``,
+  ``E=270°``, ``F=210°``. Because labels are now mapped to the correct nominal
+  spoke angles, users may observe different per-spoke DRCS deviation values than
+  in prior versions.
+* :bdg-success:`Feature` :class:`~pylinac.vmat.DRCS` analyzed image plots now
+  include detected collimator line overlays on the DMLC image for both matplotlib
+  and Plotly outputs. The overlays are intentionally omitted from the Open image.
+
+General
+^^^^^^^
+
+* :bdg-success:`Feature` CT-like modules that have the ``plotly_side_view`` and ``plot_side_view``
+  methods now accept ``kwargs`` that are passed to the visualization method. This allows for more customization, such as
+  the above change setting the visualization thresholds.
+
+Geometry
+^^^^^^^^
+
+* :bdg-success:`Feature` :class:`~pylinac.core.geometry.Circle` ``plotly()``
+  now accepts ``text`` and ``fontsize`` parameters, matching the existing
+  ``plot2axes()`` labeling support.
+
+v 3.43.2
+--------
+
+.. note::
+
+   The 3.43.1 release was yanked due to the change below not being fully included.
+
+Profiles
+^^^^^^^^
+
+* :bdg-warning:`Fixed` :meth:`~pylinac.core.profile.SingleProfile.field_data` now
+  correctly samples the slope and top fit regions when explicit ``x_values`` are
+  passed in physical space. This fixes failures where the inner fit window could
+  collapse after rounding, causing incorrect results or exceptions for field data
+  and downstream analyses.
+
+v 3.43.0
+--------
+
+General
+^^^^^^^
+
+* :bdg-danger:`Change` The minimum version of Python supported is now 3.10 as the end-of-life of Python 3.9 is was in 2025.
+
+Core
+^^^^
+
+* :bdg-warning:`Fixed` :meth:`~pylinac.core.image.DicomImage.cax` no longer raises a
+  ``TypeError`` when the ``RTImageSID`` DICOM tag is absent and no ``sid`` was passed
+  to the constructor. The magnification factor calculation is now inside the existing
+  ``try/except`` block and falls back to the image center, consistent with behavior
+  for film and other non-EPID images.
+
+
+ACR Phantoms
+^^^^^^^^^^^^
+
+* :bdg-warning:`Fixed` ``from_demo_image()`` now raises
+  ``NotImplementedError`` instead of an unexpected exception, as no demo dataset is
+  available.
+* :bdg-warning:`Fixed` Fixed ``save_images``: it uses the current folder when
+  ``directory=None``
+* :bdg-warning:`Fixed` :class:`~pylinac.acr.ACRMRILarge` sagittal localization now
+  correctly reports the length for ROI1. The outermost measurement column was moved
+  from -75 mm to -60 mm from the phantom centroid, keeping it within the reliable
+  signal region and preventing the profile edge-detector from latching onto dark
+  artifacts.
+
+Quart
+^^^^^
+
+* :bdg-warning:`Fixed` Fixed ``save_images``: it uses the current folder when
+  ``directory=None``
+* :bdg-warning:`Fixed` Corrected the CNR equation in the documentation to include
+  :math:`\sigma_{Acrylic}` in the denominator, matching the actual implementation
+  and the Varian manual.
+
+GE Helios CT Daily QA Phantoms
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+* :bdg-success:`Feature` Added support for :ref:`helios`.
+
+v 3.42.0
+--------
+
+Core
+^^^^
+
+* :bdg-success:`Feature` Added ``display_dtype`` parameter to :meth:`~pylinac.core.image.BaseImage.plotly` to reduce the size of Plotly HTML/JSON output when writing figures to HTML (e.g. via ``fig.write_html()``).
+  Passing a dtype such as ``np.float32`` casts the heatmap data before serialization; Plotly's JSON encoder then writes fewer significant digits, which significantly reduces file size (often ~50% or more for large images).
+* :bdg-success:`Refactor` Improved the generation speed and memory usage when calling ``plot_analyzed_image`` for the ``ACRDigitalMammography`` phantom.
+
+Profiles
+^^^^^^^^
+
+* :bdg-success:`Feature` Added ``centering`` parameter to :class:`~pylinac.core.profile.SingleProfile`.
+  The center point used for field region extraction (and thus for flatness and symmetry calculations in protocols such as Varian and Siemens) can now be chosen:
+
+  * **Beam center** (default): midpoint between detected field edges (FWHM, inflection, etc.). Preserves previous behavior.
+  * **Geometric center**: midpoint of the detector array (physical center).
+
+  Use the ``centering`` parameter in the constructor, e.g. ``SingleProfile(values, centering=Centering.GEOMETRIC_CENTER)``.
+  The :class:`~pylinac.core.profile.Centering` enum is available from ``pylinac``.
+
+Planar Imaging
+^^^^^^^^^^^^^^
+
+* :bdg-success:`Refactor` :class:`~pylinac.planar_imaging.ACRDigitalMammography` Plotly image rendering now uses a display-only crop based on the phantom ROI outline.
+  This reduces Plotly HTML size and write/render time substantially for ACR mammography figures while leaving analysis data/results unchanged.
+
 v 3.41.0
 --------
 
@@ -35,6 +207,11 @@ Planar Imaging
   This parameter controls the kernel size multiplier used in adaptive histogram equalization when detecting BBs near the field edge.
   The default value is 2.0, preserving backward compatibility. Lower values (e.g., 1.0) may help detect BBs that are very close to the field edge.
   This addresses issues with BB detection for phantoms like Doselab RLf when BBs are positioned near the field edge.
+
+* :bdg-primary:`Refactor` ACR digital mammography analysis now crops the image array before matplotlib rendering instead of after,
+  reducing memory use and improving performance when generating the numerous figures for the ACR mammography report.
+  This does not affect analysis results.
+
 
 v 3.40.0
 --------

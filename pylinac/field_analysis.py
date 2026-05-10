@@ -6,10 +6,11 @@ import io
 import os.path as osp
 import warnings
 import webbrowser
+from collections.abc import Callable
 from enum import Enum
 from math import ceil, floor
 from pathlib import Path
-from typing import BinaryIO, Callable
+from typing import BinaryIO
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -874,7 +875,6 @@ class FieldAnalysis(ResultsDataMixin[FieldResult], QuaacMixin):
         results = [
             "Field Analysis Results",
             "----------------------",
-            f"File: {self._path}",
             f"Protocol: {self._protocol.name}",
         ]
         if not self._from_device:

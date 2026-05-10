@@ -28,10 +28,10 @@ import math
 import os.path as osp
 import warnings
 import webbrowser
-from collections.abc import Generator, Iterator
+from collections.abc import Callable, Generator, Iterator
 from functools import cached_property
 from pathlib import Path
-from typing import BinaryIO, Callable, Literal
+from typing import BinaryIO, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -180,6 +180,12 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
 
     _demo_filename: str
     common_name: str
+    _LABEL_KWARGS = frozenset(
+        {
+            "show_roi_labels",
+            "roi_label_font_size",
+        }
+    )
     high_contrast_roi_settings = {}
     high_contrast_rois = []
     low_contrast_roi_settings = {}
@@ -624,6 +630,8 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
         show: bool = True,
         show_legend: bool = True,
         show_colorbar: bool = True,
+        show_roi_labels: bool = False,
+        roi_label_font_size: float = 10,
         **kwargs,
     ) -> dict[str, go.Figure]:
         """Plot the analyzed set of images to Plotly figures.
@@ -637,6 +645,11 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
             Whether to show the colorbar on the plot.
         show_legend : bool
             Whether to show the legend on the plot.
+        show_roi_labels : bool
+            Whether to show labels (``LC0``, ``HC0``, ...) for low- and
+            high-contrast ROIs on the image plot.
+        roi_label_font_size : float
+            Font size of ROI labels in display units.
         kwargs
             Additional keyword arguments to pass to the plot.
 
@@ -671,11 +684,19 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
         # plot the low contrast background ROIs
         if self.low_contrast_rois:
             for idx, roi in enumerate(self.low_contrast_background_rois):
+                lcr_label = (
+                    "LCR"
+                    if len(self.low_contrast_background_rois) == 1
+                    else f"LCR{idx}"
+                )
                 roi.plotly(
                     image_fig,
                     line_color="blue",
-                    name=f"LCR{idx}",
+                    name=lcr_label,
                     showlegend=show_legend,
+                    text=lcr_label if show_roi_labels else "",
+                    fontsize=roi_label_font_size,
+                    label_position="upper left",
                 )
             # plot the low contrast ROIs
             for idx, roi in enumerate(self.low_contrast_rois):
@@ -684,6 +705,9 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
                     line_color=roi.plot_color,
                     name=f"LC{idx}",
                     showlegend=show_legend,
+                    text=f"LC{idx}" if show_roi_labels else "",
+                    fontsize=roi_label_font_size,
+                    label_position="upper left",
                 )
         # plot the high-contrast ROIs along w/ pass/fail coloration
         if self.high_contrast_rois:
@@ -696,6 +720,9 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
                     line_color=color,
                     name=f"HC{idx}",
                     showlegend=show_legend,
+                    text=f"HC{idx}" if show_roi_labels else "",
+                    fontsize=roi_label_font_size,
+                    label_position="upper left",
                 )
 
         # plot the low contrast value graph
@@ -722,6 +749,8 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
         high_contrast: bool = True,
         show: bool = True,
         split_plots: bool = False,
+        show_roi_labels: bool = False,
+        roi_label_font_size: str = "medium",
         **plt_kwargs: dict,
     ) -> tuple[list[plt.Figure], list[str]]:
         """Plot the analyzed image.
@@ -738,6 +767,13 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
             Whether to actually show the image when called.
         split_plots : bool
             Whether to split the resulting image into individual plots. Useful for saving images into individual files.
+        show_roi_labels : bool
+            Whether to show labels (``LC0``, ``HC0``, ...) for low- and
+            high-contrast ROIs on the image plot.
+        roi_label_font_size : str
+            The size of the text, if provided. See
+            https://matplotlib.org/stable/api/_as_gen/matplotlib.pyplot.text.html
+            for options.
         plt_kwargs : dict
             Keyword args passed to the plt.figure() method. Allows one to set things like figure size.
         """
@@ -783,18 +819,41 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
                 outline_obj = self._create_phantom_outline_object()
                 outline_obj.plot2axes(img_ax, edgecolor="b")
             # plot the low contrast background ROIs
-            for roi in self.low_contrast_background_rois:
-                roi.plot2axes(img_ax, edgecolor="b")
+            for idx, roi in enumerate(self.low_contrast_background_rois):
+                lcr_label = (
+                    "LCR"
+                    if len(self.low_contrast_background_rois) == 1
+                    else f"LCR{idx}"
+                )
+                roi.plot2axes(
+                    img_ax,
+                    edgecolor="b",
+                    text=lcr_label if show_roi_labels else "",
+                    fontsize=roi_label_font_size,
+                    label_position="upper left",
+                )
             # plot the low contrast ROIs
-            for roi in self.low_contrast_rois:
-                roi.plot2axes(img_ax, edgecolor=roi.plot_color)
+            for idx, roi in enumerate(self.low_contrast_rois):
+                roi.plot2axes(
+                    img_ax,
+                    edgecolor=roi.plot_color,
+                    text=f"LC{idx}" if show_roi_labels else "",
+                    fontsize=roi_label_font_size,
+                    label_position="upper left",
+                )
             # plot the high-contrast ROIs along w/ pass/fail coloration
             if self.high_contrast_rois:
-                for roi, mtf in zip(
-                    self.high_contrast_rois, self.mtf.norm_mtfs.values()
+                for idx, (roi, mtf) in enumerate(
+                    zip(self.high_contrast_rois, self.mtf.norm_mtfs.values())
                 ):
                     color = "g" if mtf > self._high_contrast_threshold else "r"
-                    roi.plot2axes(img_ax, edgecolor=color)
+                    roi.plot2axes(
+                        img_ax,
+                        edgecolor=color,
+                        text=f"HC{idx}" if show_roi_labels else "",
+                        fontsize=roi_label_font_size,
+                        label_position="upper left",
+                    )
             # plot the center of the detected ROI; used for qualitative eval of detection algorithm
             img_ax.scatter(x=self.phantom_center.x, y=self.phantom_center.y, marker="x")
 
@@ -909,7 +968,7 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
         as_list : bool
             Whether to return as a list of strings vs single string. Pretty much for internal usage.
         """
-        text = [f"{self.common_name} results:", f"File: {self.image.truncated_path}"]
+        text = [f"{self.common_name} results:"]
         if self.low_contrast_rois:
             text += [
                 f"Median Contrast: {np.median([roi.contrast for roi in self.low_contrast_rois]):2.2f}",
@@ -1248,7 +1307,6 @@ class StandardImagingFC2(ImagePhantomBase):
         """Return the results of the analysis."""
         text = [
             f"{self.common_name} results:",
-            f"File: {self.image.truncated_path}",
             f"The detected inplane field size was {self.field_width_y:2.1f}mm",
             f"The detected crossplane field size was {self.field_width_x:2.1f}mm",
             f"The inplane field was {self.field_epid_offset_mm.y:2.1f}mm from the EPID CAX",
@@ -1427,6 +1485,8 @@ class StandardImagingFC2(ImagePhantomBase):
         show : bool
             Whether to actually show the image when called.
         """
+        for key in ImagePhantomBase._LABEL_KWARGS:
+            kwargs.pop(key, None)
         figs = []
         names = []
         fig, axes = plt.subplots(1)
@@ -1801,7 +1861,7 @@ class LasVegas(ImagePhantomBase):
         as_list : bool
             Whether to return as a list of strings vs single string. Pretty much for internal usage.
         """
-        text = [f"{self.common_name} results:", f"File: {self.image.truncated_path}"]
+        text = [f"{self.common_name} results:"]
         text += [
             f"Median Contrast: {np.median([roi.contrast for roi in self.low_contrast_rois]):2.2f}",
             f"Median CNR: {np.median([roi.contrast_to_noise for roi in self.low_contrast_rois]):2.1f}",
@@ -2765,8 +2825,10 @@ class LeedsTOR(ImagePhantomBase):
                 lambda r: math.isclose(r.bbox_area, high_res_block_size, rel_tol=0.75)
             )
             .where(
-                lambda r: bbox_center(r).distance_to(self.phantom_center)
-                < 0.1 * self.phantom_radius
+                lambda r: (
+                    bbox_center(r).distance_to(self.phantom_center)
+                    < 0.1 * self.phantom_radius
+                )
             )
             .order_by_descending(
                 lambda r: bbox_center(r).distance_to(self.phantom_center)
@@ -3020,12 +3082,100 @@ class DoselabMC2kV(ImagePhantomBase):
         return math.sqrt(self.phantom_ski_region.bbox_area) * 1.214
 
     def _phantom_angle_calc(self) -> float:
+        """Estimate MC2 phantom angle from the outline via a constrained Hough line
+        transform.
+
+        ### Algorithm
+
+        1. **Define a search window** around the expected nominal angle.
+
+           - ``nominal_angle_deg`` is the expected orientation for an MC2 setup (≈ 45°).
+           - ``max_angle_deviation`` defines the full width of the search band
+             around nominal.
+           - ``angle_resolution`` defines the granularity of the Hough search grid.
+
+        2. **Run the Hough line transform** on ``roi.image`` using only that
+           constrained set of angles.
+
+        3. **Select line peaks** using :func:`skimage.transform.hough_line_peaks`
+           and enforce a minimum separation between detected peaks:
+
+           - ``min_distance_mm`` is converted to pixels via the image's dots-per-mm
+             (``dpmm``).
+           - This helps avoid counting multiple near-duplicate peaks for the same
+             physical edge.
+
+        4. **Expect exactly two dominant peaks** corresponding to two principal
+           outline directions visible in the edge mask.
+
+           - If two peaks are not found, a warning is emitted and an angle of
+             ``0.0`` is returned as a safe default (consistent with older behavior
+             that allowed analysis to proceed even when roll/angle detection is
+             inconclusive).
+
+        5. **Compute the final angle** as the mean of the two peak angles (in degrees).
+
+        Returns
+        -------
+        float
+            The estimated phantom angle in degrees.
+
+        Warnings
+        --------
+        UserWarning
+            Emitted when the algorithm cannot find exactly two distinct Hough peaks
+            within the constrained angle search window. In that case the method
+            returns ``45.0``.
+        """
+
+        # Expected MC2 angle (deg).
+        nominal_angle_deg = 45
+        # Total Hough search band width around nominal (deg).
+        max_angle_deviation = 10
+        # Hough theta sampling resolution within the band (deg).
+        angle_resolution = 0.01
+        # Minimum separation between detected peaks (mm).
+        min_distance_mm = 70
+
+        min_distance_px = int(min_distance_mm * self.image.dpmm)
+
+        half_angle_deviation = max_angle_deviation / 2
+
+        start_angle = nominal_angle_deg - half_angle_deviation
+        final_angle = nominal_angle_deg + half_angle_deviation
+
+        num_angles = int(max_angle_deviation / angle_resolution + 1)
+
+        angles_deg = np.linspace(start_angle, final_angle, num=num_angles)
+        angles_rad = np.deg2rad(angles_deg)
+
         roi = self.phantom_ski_region
-        angle = np.degrees(roi.orientation) + 90
-        if not np.isclose(angle, 45, atol=5):
-            raise ValueError(
-                "Angles not close enough to the ideal 45 degrees. Check phantom setup or override angle."
+
+        hspace, angles, dists = transform.hough_line(image=roi.image, theta=angles_rad)
+
+        _, peak_angles, _ = transform.hough_line_peaks(
+            hspace=hspace,
+            angles=angles,
+            dists=dists,
+            min_distance=min_distance_px,
+            num_peaks=2,
+        )
+
+        # cast to avoid lint warning.
+        peak_angles: np.ndarray = peak_angles
+
+        # Warning if the two edges were not detected.
+        if len(peak_angles) != 2:
+            warnings.warn(
+                "Could not determine phantom roll. Setting roll to 45.",
+                UserWarning,
             )
+            return 45.0
+
+        line_angles = np.rad2deg(peak_angles)
+        mean_angle = np.mean(line_angles)
+        angle = float(mean_angle)
+
         return angle
 
 
@@ -3397,6 +3547,60 @@ class ACRDigitalMammography(ImagePhantomBase):
                 else:
                     roi.plot2axes(axes, edgecolor="red", fill=fill, alpha=alpha)
 
+        def plotly(
+            self,
+            fig: go.Figure,
+            fill: bool = False,
+            alpha: float = 1.0,
+            showlegend: bool = True,
+            legendgroup: str | None = None,
+            **kwargs,
+        ) -> None:
+            """Plot the speck group ROI and individual specks to a plotly figure."""
+            color = ACR_SCORE_COLORS[self.score]
+            group = legendgroup or "speck_group"
+            existing_names = {trace.name for trace in fig.data}
+            super().plotly(
+                fig=fig,
+                fill=fill,
+                line_color=color,
+                opacity=alpha,
+                name=kwargs.pop("name", "Speck Group ROI"),
+                showlegend=showlegend and "Speck Group ROI" not in existing_names,
+                legendgroup=group,
+                **kwargs,
+            )
+            existing_names.add("Speck Group ROI")
+            for roi in self.specks:
+                if roi.passed_visibility:
+                    show_this_legend = (
+                        showlegend and "Visible Speck" not in existing_names
+                    )
+                    roi.plotly(
+                        fig,
+                        line_color="green",
+                        opacity=alpha,
+                        name="Visible Speck",
+                        showlegend=show_this_legend,
+                        legendgroup=f"{group}_visible",
+                    )
+                    if show_this_legend:
+                        existing_names.add("Visible Speck")
+                else:
+                    show_this_legend = (
+                        showlegend and "Hidden Speck" not in existing_names
+                    )
+                    roi.plotly(
+                        fig,
+                        line_color="red",
+                        opacity=alpha,
+                        name="Hidden Speck",
+                        showlegend=show_this_legend,
+                        legendgroup=f"{group}_hidden",
+                    )
+                    if show_this_legend:
+                        existing_names.add("Hidden Speck")
+
         def as_dict(self) -> dict:
             return {
                 "num_specks_visible": self.num_specks_visible,
@@ -3473,6 +3677,16 @@ class ACRDigitalMammography(ImagePhantomBase):
 
             img_lab = measure.label(img_clo)
             regions = measure.regionprops(img_lab, intensity_image=img_clo)
+            regions = [region for region in regions if region.axis_minor_length > 0]
+            orientation_candidates = [
+                region
+                for region in regions
+                if abs(np.rad2deg(region.orientation) - fiber_orientation)
+                <= fiber_orientation_tolerance
+                and region.axis_major_length / region.axis_minor_length > 2
+            ]
+            if orientation_candidates:
+                regions = orientation_candidates
             self.region = sorted(regions, key=lambda r: r.axis_major_length)[-1]
 
             self.fiber_length = self.region.axis_major_length * pixel_size
@@ -3530,6 +3744,52 @@ class ACRDigitalMammography(ImagePhantomBase):
                 c=self.plot_color,
                 marker="s",
                 alpha=alpha,
+            )
+
+        def plotly(
+            self,
+            fig: go.Figure,
+            fill: bool = False,
+            alpha: float = 1.0,
+            line_color: str | None = None,
+            showlegend: bool = True,
+            legendgroup: str | None = None,
+            **kwargs,
+        ) -> None:
+            """Plot the ROI box and detected fiber boundary to a plotly figure."""
+            group = legendgroup or "fiber"
+            color = line_color or self.plot_color
+            existing_names = {trace.name for trace in fig.data}
+            super().plotly(
+                fig=fig,
+                fill=fill,
+                line_color=color,
+                opacity=alpha,
+                name=kwargs.pop("name", "Fiber ROI"),
+                showlegend=showlegend and "Fiber ROI" not in existing_names,
+                legendgroup=group,
+                **kwargs,
+            )
+
+            boundary = get_boundary(
+                self.region,
+                round(self.center.y - self.height / 2),
+                round(self.center.x - self.width / 2),
+            )
+            boundary_y, boundary_x = np.nonzero(boundary)
+            fig.add_scatter(
+                x=boundary_x,
+                y=boundary_y,
+                mode="markers",
+                marker={
+                    "size": 3,
+                    "color": color,
+                    "symbol": "square",
+                },
+                opacity=alpha,
+                name="Fiber Boundary",
+                showlegend=showlegend and "Fiber Boundary" not in existing_names,
+                legendgroup=f"{group}_boundary",
             )
 
     @staticmethod
@@ -3802,7 +4062,7 @@ class ACRDigitalMammography(ImagePhantomBase):
 
     def results(self, as_list: bool = False) -> str | list[str]:
         """Analysis results"""
-        text = [f"{self.common_name} results:", f"File: {self.image.truncated_path}"]
+        text = [f"{self.common_name} results:"]
 
         # Mass ROIs (low contrast)
         num_masses_seen = sum(roi.passed_visibility for roi in self.low_contrast_rois)
@@ -3860,6 +4120,320 @@ class ACRDigitalMammography(ImagePhantomBase):
             ),
         }
 
+    def _plotly_display_window(
+        self, padding_ratio: float = 0.08, min_padding_px: int = 12
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return display-only cropped image based on the phantom outline."""
+
+        outline_obj = self._create_phantom_outline_object()
+        xs = [float(v.x) for v in outline_obj.vertices]
+        ys = [float(v.y) for v in outline_obj.vertices]
+        min_x = min(xs)
+        min_y = min(ys)
+        max_x = max(xs)
+        max_y = max(ys)
+
+        span = max(max_x - min_x, max_y - min_y)
+        padding = max(min_padding_px, int(np.ceil(span * padding_ratio)))
+        rows, cols = self.image.shape
+        x0 = max(0, int(np.floor(min_x - padding)))
+        y0 = max(0, int(np.floor(min_y - padding)))
+        x1 = min(cols, int(np.ceil(max_x + padding)))
+        y1 = min(rows, int(np.ceil(max_y + padding)))
+
+        # Ensure non-empty bounds after clamping.
+        if x1 <= x0:
+            x1 = min(cols, x0 + 1)
+        if y1 <= y0:
+            y1 = min(rows, y0 + 1)
+
+        return (
+            np.arange(x0, x1, 1),
+            np.arange(y0, y1, 1),
+            self.image.array[y0:y1, x0:x1],
+        )
+
+    @override
+    def plotly_analyzed_images(
+        self,
+        show: bool = True,
+        show_legend: bool = True,
+        show_colorbar: bool = True,
+        **kwargs,
+    ) -> dict[str, go.Figure]:
+        """Plot analyzed images to Plotly with a display-only cropped image window."""
+        figs: dict[str, go.Figure] = {}
+        for key in self._LABEL_KWARGS:
+            kwargs.pop(key, None)
+        kwargs.pop("x", None)
+        kwargs.pop("y", None)
+        kwargs.pop("z", None)
+        x, y, z = self._plotly_display_window()
+
+        image_fig = self.image.plotly(
+            show=False,
+            title=f"{self.common_name} Phantom Analysis",
+            zmin=self.window_floor(),
+            zmax=self.window_ceiling(),
+            x=x,
+            y=y,
+            z=z,
+            show_colorbar=show_colorbar,
+            show_legend=show_legend,
+            **kwargs,
+        )
+        figs["Image"] = image_fig
+
+        if self.phantom_outline_object is not None:
+            outline_obj = self._create_phantom_outline_object()
+            outline_obj.plotly(
+                image_fig,
+                line_color="blue",
+                name="Outline",
+                showlegend=show_legend,
+            )
+
+        show_bg_legend = show_legend
+        for roi in self.low_contrast_background_rois:
+            roi.plotly(
+                image_fig,
+                line_color="blue",
+                name="Mass Background ROI",
+                showlegend=show_bg_legend,
+                legendgroup="mass_background",
+            )
+            show_bg_legend = False
+
+        show_mass_pass_legend = show_legend
+        show_mass_fail_legend = show_legend
+        for roi in self.low_contrast_rois:
+            color = "green" if roi.contrast > roi.contrast_threshold else "red"
+            passed = color == "green"
+            roi.plotly(
+                image_fig,
+                line_color=color,
+                name="Mass ROI (Pass)" if passed else "Mass ROI (Fail)",
+                showlegend=(show_mass_pass_legend if passed else show_mass_fail_legend),
+                legendgroup="mass_pass" if passed else "mass_fail",
+            )
+            if passed:
+                show_mass_pass_legend = False
+            else:
+                show_mass_fail_legend = False
+
+        for speck_group in self.speck_groups:
+            speck_group.plotly(
+                image_fig,
+                showlegend=show_legend,
+                legendgroup="speck_group",
+            )
+
+        for fiber in self.fibers:
+            fiber.plotly(
+                image_fig,
+                line_color="limegreen",
+                showlegend=show_legend,
+                legendgroup="fiber",
+            )
+
+        mass_fig = go.Figure()
+        self._plotly_mass_contrast_graph(mass_fig, show_legend=show_legend)
+        figs["Low Contrast"] = mass_fig
+
+        speck_fig = make_subplots(specs=[[{"secondary_y": True}]])
+        self._plotly_speck_group_graph(speck_fig, show_legend=show_legend)
+        figs["Speck Group"] = speck_fig
+
+        fiber_fig = go.Figure()
+        self._plotly_fiber_graph(fiber_fig, show_legend=show_legend)
+        figs["Fiber"] = fiber_fig
+
+        if show:
+            for fig in figs.values():
+                fig.show()
+        return figs
+
+    def _plotly_mass_contrast_graph(self, fig: go.Figure, show_legend: bool) -> None:
+        roi_labels = []
+        contrast_values = []
+        for i, roi in enumerate(self.low_contrast_rois):
+            roi_labels.append(i + 1)
+            contrast_values.append(roi.contrast)
+
+        roi_indices = list(range(len(contrast_values)))
+        fig.add_scatter(
+            x=roi_indices,
+            y=contrast_values,
+            mode="lines+markers",
+            line={
+                "color": "magenta",
+                "width": 2,
+            },
+            marker={
+                "size": 8,
+            },
+            name="Contrast",
+        )
+        fig.add_scatter(
+            x=roi_indices,
+            y=[self._low_contrast_threshold] * len(roi_indices),
+            mode="lines",
+            line={
+                "color": "cyan",
+                "dash": "dash",
+                "width": 2,
+            },
+            name="Contrast Threshold",
+        )
+        add_title(fig, "Mass ROI Contrast")
+        fig.update_layout(
+            showlegend=show_legend,
+            xaxis_title="Mass ROI",
+            yaxis_title="Contrast Value",
+        )
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=roi_indices,
+            ticktext=roi_labels,
+            showspikes=True,
+        )
+        fig.update_yaxes(showspikes=True)
+
+    def _plotly_speck_group_graph(self, fig: go.Figure, show_legend: bool) -> None:
+        speck_labels = []
+        speck_counts = []
+        speck_group_scores = []
+        for i, grp in enumerate(self.speck_groups):
+            speck_labels.append(i + 1)
+            speck_counts.append(grp.num_specks_visible)
+            speck_group_scores.append(grp.score)
+
+        speck_indices = list(range(len(speck_counts)))
+        fig.add_scatter(
+            x=speck_indices,
+            y=speck_counts,
+            mode="lines+markers",
+            line={
+                "color": "blue",
+                "width": 2,
+            },
+            marker={
+                "symbol": "square",
+                "size": 8,
+            },
+            name="Specks Visible",
+            secondary_y=False,
+        )
+
+        if self.speck_groups:
+            xvals = (
+                [speck_indices[0], speck_indices[-1]]
+                if speck_indices
+                else [0, len(self.speck_groups) - 1]
+            )
+            fig.add_scatter(
+                x=xvals,
+                y=[self.speck_groups[0].half_thresh] * 2,
+                mode="lines",
+                line={
+                    "color": "cyan",
+                    "dash": "dash",
+                },
+                name="Half Score Threshold",
+                secondary_y=False,
+            )
+            fig.add_scatter(
+                x=xvals,
+                y=[self.speck_groups[0].full_thresh] * 2,
+                mode="lines",
+                line={
+                    "color": "magenta",
+                    "dash": "dash",
+                },
+                name="Full Score Threshold",
+                secondary_y=False,
+            )
+
+        fig.add_scatter(
+            x=speck_indices,
+            y=speck_group_scores,
+            mode="lines+markers",
+            line={
+                "color": "green",
+                "width": 2,
+            },
+            marker={
+                "symbol": "triangle-up",
+                "size": 8,
+            },
+            name="Group Score",
+            secondary_y=True,
+        )
+
+        add_title(fig, "Speck Groups")
+        fig.update_layout(
+            showlegend=show_legend,
+        )
+        fig.update_xaxes(
+            title_text="Speck Group",
+            tickmode="array",
+            tickvals=speck_indices,
+            ticktext=speck_labels,
+            showspikes=True,
+        )
+        fig.update_yaxes(
+            title_text="Number of Specks Visible",
+            secondary_y=False,
+            showspikes=True,
+        )
+        fig.update_yaxes(
+            title_text="Group Score",
+            secondary_y=True,
+            range=[-0.1, 1.1],
+            tickvals=[0, 0.5, 1],
+            showgrid=False,
+            showspikes=True,
+        )
+
+    def _plotly_fiber_graph(self, fig: go.Figure, show_legend: bool) -> None:
+        fiber_labels = []
+        fiber_scores = []
+        for i, fiber in enumerate(self.fibers):
+            fiber_labels.append(i + 1)
+            fiber_scores.append(fiber.score)
+
+        fiber_indices = list(range(len(fiber_scores)))
+        fig.add_scatter(
+            x=fiber_indices,
+            y=fiber_scores,
+            mode="lines+markers",
+            line={
+                "color": "red",
+                "width": 2,
+            },
+            marker={
+                "size": 8,
+            },
+            name="Fiber Score",
+        )
+        add_title(fig, "Fibers")
+        fig.update_layout(
+            showlegend=show_legend,
+            xaxis_title="Fiber",
+            yaxis_title="Fiber Score",
+        )
+        fig.update_xaxes(
+            tickmode="array",
+            tickvals=fiber_indices,
+            ticktext=fiber_labels,
+            showspikes=True,
+        )
+        fig.update_yaxes(
+            range=[-0.1, 1.1],
+            tickvals=[0, 0.5, 1],
+            showspikes=True,
+        )
+
     def _plot_analyzed_image_iter(
         self,
         show: bool = True,
@@ -3888,6 +4462,11 @@ class ACRDigitalMammography(ImagePhantomBase):
         tuple[plt.Figure, str]
             A tuple containing the figure object and its name. Yields one figure at a time to reduce memory usage.
         """
+        # ACR mammography zoom views are standardized at 3x ROI size for consistency.
+        zoom_factor = 3.0
+        vmin = self.window_floor()
+        vmax = self.window_ceiling()
+
         # First figure: Image with ROIs marked
         fig1, ax1 = plt.subplots(1, **plt_kwargs)
 
@@ -3895,8 +4474,8 @@ class ACRDigitalMammography(ImagePhantomBase):
         self.image.plot(
             ax=ax1,
             show=False,
-            vmin=self.window_floor(),
-            vmax=self.window_ceiling(),
+            vmin=vmin,
+            vmax=vmax,
         )
         ax1.axis("off")
         ax1.set_title(f"{self.common_name} Phantom Analysis")
@@ -4069,19 +4648,23 @@ class ACRDigitalMammography(ImagePhantomBase):
             plt.show()
         yield fig4, "Fiber"
 
-        # Create zoomed-in figures for each ROI
-        zoom_factor = 3.0  # How much larger than the ROI to show
-
         # Zoomed-in figures for mass ROIs
         for i, roi in enumerate(self.low_contrast_rois):
             fig_zoom, ax_zoom = plt.subplots(1, **plt_kwargs)
 
-            # Plot the full image
-            self.image.plot(
+            zoom_size = roi.radius * zoom_factor
+            # Render only the required tile to avoid repeatedly rasterizing the full detector image.
+            image._render_zoomed_window(
                 ax=ax_zoom,
-                show=False,
-                vmin=self.window_floor(),
-                vmax=self.window_ceiling(),
+                array=self.image.array,
+                center_x=roi.center.x,
+                center_y=roi.center.y,
+                half_width=zoom_size,
+                half_height=zoom_size,
+                cmap=image.get_dicom_cmap(),
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="none",
             )
             ax_zoom.axis("off")
             ax_zoom.set_title(f"Mass {i + 1} (Zoomed)")
@@ -4089,10 +4672,6 @@ class ACRDigitalMammography(ImagePhantomBase):
             # Plot the ROI
             roi.plot2axes(ax_zoom, edgecolor=roi.plot_color)
 
-            # Set zoom limits (3x the ROI radius)
-            zoom_size = roi.radius * zoom_factor
-            ax_zoom.set_xlim(roi.center.x - zoom_size, roi.center.x + zoom_size)
-            ax_zoom.set_ylim(roi.center.y + zoom_size, roi.center.y - zoom_size)
             if show:
                 plt.show()
             yield fig_zoom, f"Mass {i + 1}"
@@ -4101,12 +4680,19 @@ class ACRDigitalMammography(ImagePhantomBase):
         for i, speck_group in enumerate(self.speck_groups):
             fig_zoom, ax_zoom = plt.subplots(1, **plt_kwargs)
 
-            # Plot the full image
-            self.image.plot(
+            zoom_size = max(speck_group.width, speck_group.height) * zoom_factor / 2
+            # Keep global coordinates so existing overlay objects can plot unchanged.
+            image._render_zoomed_window(
                 ax=ax_zoom,
-                show=False,
-                vmin=self.window_floor(),
-                vmax=self.window_ceiling(),
+                array=self.image.array,
+                center_x=speck_group.center.x,
+                center_y=speck_group.center.y,
+                half_width=zoom_size,
+                half_height=zoom_size,
+                cmap=image.get_dicom_cmap(),
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="none",
             )
             ax_zoom.axis("off")
             ax_zoom.set_title(f"Speck Group {i + 1} (Zoomed)")
@@ -4114,14 +4700,6 @@ class ACRDigitalMammography(ImagePhantomBase):
             # Plot the speck group
             speck_group.plot2axes(ax_zoom)
 
-            # Set zoom limits (3x the ROI size)
-            zoom_size = max(speck_group.width, speck_group.height) * zoom_factor / 2
-            ax_zoom.set_xlim(
-                speck_group.center.x - zoom_size, speck_group.center.x + zoom_size
-            )
-            ax_zoom.set_ylim(
-                speck_group.center.y + zoom_size, speck_group.center.y - zoom_size
-            )
             if show:
                 plt.show()
             yield fig_zoom, f"Speck Group {i + 1}"
@@ -4130,12 +4708,19 @@ class ACRDigitalMammography(ImagePhantomBase):
         for i, fiber in enumerate(self.fibers):
             fig_zoom, ax_zoom = plt.subplots(1, **plt_kwargs)
 
-            # Plot the full image
-            self.image.plot(
+            zoom_size = max(fiber.width, fiber.height) * zoom_factor / 2
+            # Crop-first rendering minimizes memory churn when exporting many zoom figures.
+            image._render_zoomed_window(
                 ax=ax_zoom,
-                show=False,
-                vmin=self.window_floor(),
-                vmax=self.window_ceiling(),
+                array=self.image.array,
+                center_x=fiber.center.x,
+                center_y=fiber.center.y,
+                half_width=zoom_size,
+                half_height=zoom_size,
+                cmap=image.get_dicom_cmap(),
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="none",
             )
             ax_zoom.axis("off")
             ax_zoom.set_title(f"Fiber {i + 1} (Zoomed)")
@@ -4143,10 +4728,6 @@ class ACRDigitalMammography(ImagePhantomBase):
             # Plot the fiber
             fiber.plot2axes(ax_zoom, alpha=0.25)
 
-            # Set zoom limits (3x the ROI size)
-            zoom_size = max(fiber.width, fiber.height) * zoom_factor / 2
-            ax_zoom.set_xlim(fiber.center.x - zoom_size, fiber.center.x + zoom_size)
-            ax_zoom.set_ylim(fiber.center.y + zoom_size, fiber.center.y - zoom_size)
             if show:
                 plt.show()
             yield fig_zoom, f"Fiber {i + 1}"
@@ -4179,9 +4760,14 @@ class ACRDigitalMammography(ImagePhantomBase):
         tuple[list[plt.Figure], list[str]]
             A tuple containing the list of figure objects and their names.
         """
+        for key in self._LABEL_KWARGS:
+            plt_kwargs.pop(key, None)
         figs = []
         names = []
-        for fig, name in self._plot_analyzed_image_iter(show=show, **plt_kwargs):
+        for fig, name in self._plot_analyzed_image_iter(
+            show=show,
+            **plt_kwargs,
+        ):
             figs.append(fig)
             names.append(name)
         return figs, names
@@ -4211,7 +4797,10 @@ class ACRDigitalMammography(ImagePhantomBase):
         """
         if not to_stream:
             # Save to disk - process one at a time and aggressively clean up
-            for fig, name in self._plot_analyzed_image_iter(show=False, **kwargs):
+            for fig, name in self._plot_analyzed_image_iter(
+                show=False,
+                **kwargs,
+            ):
                 filename = f"{file_prefix}_analyzed_{name}.png"
                 fig.savefig(filename, **kwargs)
                 plt.close(fig)
@@ -4220,7 +4809,10 @@ class ACRDigitalMammography(ImagePhantomBase):
 
         # Save to streams - return iterator
         def stream_generator():
-            for fig, name in self._plot_analyzed_image_iter(show=False, **kwargs):
+            for fig, name in self._plot_analyzed_image_iter(
+                show=False,
+                **kwargs,
+            ):
                 stream = io.BytesIO()
                 fig.savefig(stream, **kwargs)
                 plt.close(fig)
@@ -4286,6 +4878,201 @@ class ACRDigitalMammography(ImagePhantomBase):
             webbrowser.open(filename)
 
 
+@capture_warnings
+class SmallACRMammography(ACRDigitalMammography):
+    """Small/square ACR Mammography QC phantom."""
+
+    common_name = "Small ACR Mammography"
+    _demo_filename = "SmallACRMammography.dcm"
+    phantom_bbox_size_mm2 = 85 * 85
+    roi_match_condition = "closest"
+    detection_canny_settings = {"sigma": 5, "percentiles": (0.001, 0.01)}
+    detection_conditions = [is_square]
+    phantom_outline_object = {"Rectangle": {"width ratio": 85, "height ratio": 85}}
+    # Four vertical columns inside the 85x85 mm phantom, measured from the
+    # demo image (x grows to the right, y grows downward, origin at center):
+    #   x = -25 mm: 6 fibers          (alternating -45/45 deg)
+    #   x =  -8 mm: 5 speck groups
+    #   x = +10 mm: 5 mass disks      (low-contrast)
+    #   x = +24 mm: 5 background ROIs (level with the masses)
+    low_contrast_background_roi_settings = {
+        "roi 1": {"x offset": 24, "y offset": -22, "roi radius": 2.50},
+        "roi 2": {"x offset": 24, "y offset": -11, "roi radius": 2.50},
+        "roi 3": {"x offset": 24, "y offset": 0, "roi radius": 2.50},
+        "roi 4": {"x offset": 24, "y offset": 11, "roi radius": 2.50},
+        "roi 5": {"x offset": 24, "y offset": 22, "roi radius": 2.50},
+    }
+    low_contrast_roi_settings = {
+        "roi 1": {"x offset": 10, "y offset": -28, "roi radius": 5},
+        "roi 2": {"x offset": 31, "y offset": -28, "roi radius": 2.5},
+        "roi 3": {"x offset": 31, "y offset": -11, "roi radius": 2.5},
+        "roi 4": {"x offset": 31, "y offset": 11, "roi radius": 2.5},
+        "roi 5": {"x offset": 31, "y offset": 30, "roi radius": 4},
+    }
+    speck_group_roi_settings = {
+        "roi 1": {
+            "x offset": -10,
+            "y offset": -30,
+            "size": 20.0,
+            "speck_diameter": 0.2,
+        },
+        "roi 2": {
+            "x offset": -10,
+            "y offset": -10,
+            "size": 20.0,
+            "speck_diameter": 0.2,
+        },
+        "roi 3": {
+            "x offset": 10,
+            "y offset": -10, 
+            "size": 20.0,
+            "speck_diameter": 0.2
+        },
+        "roi 4": {
+            "x offset": 10,
+            "y offset": 10,
+            "size": 20.0,
+            "speck_diameter": 0.2,
+        },
+        "roi 5": {
+            "x offset": 10,
+            "y offset": 30,
+            "size": 20.0,
+            "speck_diameter": 0.2,
+        },
+    }
+    fibers_roi_settings = {
+        "roi 1": { #perfect
+            "x offset": -30,
+            "y offset": -30,
+            "size": 15.0,
+            "fiber_diameter": 0.77,
+            "fiber_orientation": -45,
+        },
+        "roi 2": { #perfect
+            "x offset": -28,
+            "y offset": -7.5,
+            "size": 14.0,
+            "fiber_diameter": 0.77,
+            "fiber_orientation": 45,
+        },
+        "roi 3": { #perfect
+            "x offset": -27.5,
+            "y offset":15,
+            "size": 13.0,
+            "fiber_diameter": 0.77,
+            "fiber_orientation": -45,
+        },
+        "roi 4": {  #perfect
+            "x offset": -30,
+            "y offset":30,
+            "size": 15.0,
+            "fiber_diameter": 0.77,
+            "fiber_orientation": 45,
+        },
+        "roi 5": { #perfect
+            "x offset": -10,
+            "y offset": 15,
+            "size": 15.0,
+            "fiber_diameter": 0.77,
+            "fiber_orientation": -45,
+        },
+        "roi 6": { #perfect
+            "x offset": -10,
+            "y offset": 30,
+            "size": 15.0,
+            "fiber_diameter": 0.77,
+            "fiber_orientation": 45,
+        },
+    }
+
+    def _sample_low_contrast_rois(self) -> list[LowContrastDiskROI]:
+        """Sample the small ACR mass ROIs."""
+        return [
+            self._sample_low_contrast_roi_from_offsets(
+                stng=stng,
+                background_value=self.low_contrast_background_value,
+            )
+            for stng in self.low_contrast_roi_settings.values()
+        ]
+
+    def _sample_low_contrast_background_rois(
+        self,
+    ) -> tuple[list[LowContrastDiskROI], float]:
+        """Sample the small ACR mass background ROIs."""
+        bg_rois = [
+            self._sample_low_contrast_roi_from_offsets(stng=stng)
+            for stng in self.low_contrast_background_roi_settings.values()
+        ]
+        return bg_rois, np.mean([roi.pixel_value for roi in bg_rois])
+
+    def _sample_low_contrast_roi_from_offsets(
+        self, stng: dict, background_value: float | None = None
+    ) -> LowContrastDiskROI:
+        tform_phan_global = transform.EuclideanTransform(
+            rotation=np.deg2rad(self.phantom_angle),
+            translation=[self.phantom_center.x, self.phantom_center.y],
+        )
+        tform_roi_phan = transform.EuclideanTransform(
+            translation=[
+                self.dpmm * stng["x offset"],
+                self.dpmm * stng["y offset"],
+            ]
+        )
+        tform_roi_global = tform_roi_phan + tform_phan_global
+        return LowContrastDiskROI(
+            self.image,
+            self.dpmm * stng["roi radius"] * self.roi_size_factor,
+            Point(tform_roi_global.translation),
+            self._low_contrast_threshold,
+            background_value,
+            contrast_method=self._low_contrast_method,
+            visibility_threshold=self.visibility_threshold,
+        )
+
+    @staticmethod
+    def run_demo():
+        """Run the Small ACR Mammography QC phantom analysis demonstration."""
+        acr = SmallACRMammography.from_demo_image()
+        acr.analyze()
+        acr.plot_analyzed_image()
+
+    @cached_property
+    def phantom_ski_region(self) -> RegionProperties:
+        """The skimage region of the square phantom outline."""
+        regions = self._get_canny_regions()
+        image_area = self.image.shape[0] * self.image.shape[1]
+        sorted_regions = (
+            Enumerable(regions)
+            .where(lambda region: region.area_bbox > 100)
+            .where(lambda region: region.area_bbox < image_area * 0.85)
+            .order_by_descending(lambda region: region.area_bbox)
+            .to_list()
+        )
+
+        square_regions = [
+            region for region in sorted_regions if is_square(region, self, rtol=0.45)
+        ]
+        if not square_regions:
+            square_regions = [
+                region for region in sorted_regions if is_square(region, self, rtol=0.7)
+            ]
+        if not square_regions:
+            raise ValueError(
+                "Unable to find the small ACR phantom in the image. No square-like "
+                "Canny edge region was detected. Try passing center_override and "
+                "size_override, or adjust the SSD if the DICOM geometry is incorrect."
+            )
+
+        return min(
+            square_regions,
+            key=lambda region: abs(region.area_bbox - self.phantom_bbox_size_px),
+        )
+
+
+smallAcRMammography = SmallACRMammography
+
+
 def take_centermost_roi(rprops: list[RegionProperties], image_shape: tuple[int, int]):
     """Return the ROI that is closest to the center."""
     larger_rois = [
@@ -4293,7 +5080,9 @@ def take_centermost_roi(rprops: list[RegionProperties], image_shape: tuple[int, 
     ]  # drop stray pixel ROIs and line-like ROIs
     center_roi = sorted(
         larger_rois,
-        key=lambda p: abs(p.centroid[0] - image_shape[0] / 2)
-        + abs(p.centroid[1] - image_shape[1] / 2),
+        key=lambda p: (
+            abs(p.centroid[0] - image_shape[0] / 2)
+            + abs(p.centroid[1] - image_shape[1] / 2)
+        ),
     )[0]
     return center_roi

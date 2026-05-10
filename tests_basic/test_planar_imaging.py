@@ -3,15 +3,16 @@ import json
 import os
 import os.path as osp
 import tempfile
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from pathlib import Path
-from typing import Callable
-from unittest import TestCase, skip
+from unittest import SkipTest, TestCase, skip
 
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+from plotly import graph_objects as go
 from scipy.ndimage import rotate
+from skimage import measure
 
 from pylinac import (
     DoselabMC2kV,
@@ -34,10 +35,12 @@ from pylinac.planar_imaging import (
     IsoAlign,
     LeedsTORBlue,
     PlanarResult,
+    SmallACRMammography,
     SNCkV,
     StandardImagingFC2,
     StandardImagingQCkV,
     percent_integral_uniformity,
+    smallAcRMammography,
 )
 from tests_basic.core.test_utilities import QuaacTestBase, ResultsDataBase
 from tests_basic.utils import (
@@ -213,6 +216,37 @@ class GeneralTests(TestCase):
         phan = LeedsTOR.from_demo_image()
         phan.analyze()
         self.assertAlmostEqual(phan.results_data().phantom_area, 17760.9, delta=0.3)
+
+    def test_mpl_labels_shown(self):
+        phan = LeedsTOR.from_demo_image()
+        phan.analyze()
+        phan.plot_analyzed_image(
+            show=False,
+            show_roi_labels=True,
+            roi_label_font_size=9,
+        )
+        plt.close("all")
+
+    def test_plotly_labels_default_off(self):
+        """Without show_roi_labels=True, no annotations should be added."""
+        phan = LeedsTOR.from_demo_image()
+        phan.analyze()
+        figs = phan.plotly_analyzed_images(show=False)
+        image_fig = figs["Image"]
+        annotations = image_fig.layout.annotations
+        self.assertEqual(len(annotations), 0)
+
+    def test_plotly_labels_present_when_enabled(self):
+        """With show_roi_labels=True, annotations should appear."""
+        phan = LeedsTOR.from_demo_image()
+        phan.analyze()
+        figs = phan.plotly_analyzed_images(show=False, show_roi_labels=True)
+        image_fig = figs["Image"]
+        annotations = image_fig.layout.annotations
+        self.assertGreater(len(annotations), 0)
+        texts = {a.text for a in annotations}
+        self.assertTrue(any(t.startswith("LC") for t in texts))
+        self.assertTrue(any(t.startswith("HC") for t in texts))
 
 
 class PlanarPhantomMixin(QuaacTestBase, CloudFileMixin, PlotlyTestMixin):
@@ -662,10 +696,21 @@ class Elekta10MU(ElektaLasVegasMixin, TestCase):
 class DoselabMVDemo(PlanarPhantomMixin, TestCase):
     klass = DoselabMC2MV
     mtf_50 = 0.54
-    piu = 51.8
+    piu = 48.7
 
     def test_demo(self):
         DoselabMC2MV.run_demo()
+
+
+class DoseLabMVRotated(PlanarPhantomMixin, TestCase):
+    klass = DoselabMC2MV
+    dir_path = ["planar_imaging", "Doselab MC2"]
+    file_name = "rotated_MV.dcm"
+    phantom_angle = 44.6
+    piu = 97
+
+    def test_angle(self):
+        self.assertAlmostEqual(self.instance.phantom_angle, self.phantom_angle, delta=1)
 
 
 class DoselabkVDemo(PlanarPhantomMixin, TestCase):
@@ -675,6 +720,19 @@ class DoselabkVDemo(PlanarPhantomMixin, TestCase):
 
     def test_demo(self):
         DoselabMC2kV.run_demo()
+
+    def test_plot_with_labels(self):
+        self.instance.plot_analyzed_image(
+            low_contrast=False,
+            high_contrast=False,
+            show=False,
+            show_roi_labels=True,
+        )
+        plt.close("all")
+
+    def test_plotly_with_labels(self):
+        figs = self.instance.plotly_analyzed_images(show=False, show_roi_labels=True)
+        self.assertIsInstance(figs["Image"], go.Figure)
 
 
 class DoselabkV70kVp(PlanarPhantomMixin, TestCase):
@@ -689,6 +747,17 @@ class DoselabkV70kVp(PlanarPhantomMixin, TestCase):
 
     def test_window_floor(self):
         self.assertAlmostEqual(self.instance.window_floor(), -0.104, delta=0.01)
+
+
+class DoseLabkVRotated(PlanarPhantomMixin, TestCase):
+    klass = DoselabMC2kV
+    dir_path = ["planar_imaging", "Doselab MC2"]
+    file_name = "rotated_kV.dcm"
+    phantom_angle = 44.6
+    piu = 90.4
+
+    def test_angle(self):
+        self.assertAlmostEqual(self.instance.phantom_angle, self.phantom_angle, delta=1)
 
 
 class SNCkVDemo(PlanarPhantomMixin, TestCase):
@@ -1252,7 +1321,8 @@ class ACRDigitalMammographyTestMixin(PlanarPhantomMixin):
     klass = ACRDigitalMammography
     dir_path = ["planar_imaging", "ACRMammography"]
     low_contrast_visibility_threshold = 20
-    num_figs = 2
+    expected_num_figs: int | None = None
+    num_figs = 4
     speck_group_score: float | None = None
     fiber_score: float | None = None
     instance: ACRDigitalMammography
@@ -1290,9 +1360,106 @@ class ACRDigitalMammographyTestMixin(PlanarPhantomMixin):
     def test_plotting(self):
         """Overridden because we pass independent figures and do not have the `split_plots` parameter"""
         figs, names = self.instance.plot_analyzed_image()
-        self.assertEqual(len(figs), 22)
+        expected_num_figs = self.expected_num_figs or (
+            4
+            + len(self.instance.low_contrast_rois)
+            + len(self.instance.speck_groups)
+            + len(self.instance.fibers)
+        )
+        self.assertEqual(len(figs), expected_num_figs)
         self.assertIsInstance(figs[0], Figure)
         self.assertIsInstance(names[0], str)
+
+    def _outline_bounds(self) -> tuple[float, float, float, float]:
+        self.assertIsNotNone(self.instance.phantom_outline_object)
+        outline = self.instance._create_phantom_outline_object()
+        xs = [float(v.x) for v in outline.vertices]
+        ys = [float(v.y) for v in outline.vertices]
+        return min(xs), min(ys), max(xs), max(ys)
+
+    def test_plotly_image_is_display_cropped(self):
+        figs = self.instance.plotly_analyzed_images(show=False)
+        self.assertEqual(len(figs), self.num_figs)
+        image_fig = figs["Image"]
+        heatmaps = [trace for trace in image_fig.data if trace.type == "heatmap"]
+        self.assertEqual(len(heatmaps), 1)
+        heatmap = heatmaps[0]
+
+        z = np.asarray(heatmap.z)
+        self.assertLess(z.shape[0], self.instance.image.shape[0])
+        self.assertLess(z.shape[1], self.instance.image.shape[1])
+
+        x = np.asarray(heatmap.x, dtype=float)
+        y = np.asarray(heatmap.y, dtype=float)
+        min_x, min_y, max_x, max_y = self._outline_bounds()
+        # One pixel tolerance accounts for integer window indexing and inclusive ROI edges.
+        self.assertLessEqual(x[0], min_x + 1)
+        self.assertGreaterEqual(x[-1], max_x - 1)
+        self.assertLessEqual(y[0], min_y + 1)
+        self.assertGreaterEqual(y[-1], max_y - 1)
+
+    def test_plotly_image_ignores_user_crop_arrays(self):
+        figs = self.instance.plotly_analyzed_images(
+            show=False,
+            x=np.arange(0, 2, 1),
+            y=np.arange(0, 2, 1),
+            z=np.zeros((2, 2)),
+        )
+        heatmap = [trace for trace in figs["Image"].data if trace.type == "heatmap"][0]
+        z = np.asarray(heatmap.z)
+        self.assertGreater(z.shape[0], 2)
+        self.assertGreater(z.shape[1], 2)
+        self.assertLess(z.shape[0], self.instance.image.shape[0])
+        self.assertLess(z.shape[1], self.instance.image.shape[1])
+
+    def test_plotly_keys(self):
+        figs = self.instance.plotly_analyzed_images(show=False)
+        self.assertEqual(
+            set(figs.keys()), {"Image", "Low Contrast", "Speck Group", "Fiber"}
+        )
+
+    def test_plotly_image_has_expected_overlays(self):
+        figs = self.instance.plotly_analyzed_images(show=False)
+        names = [trace.name for trace in figs["Image"].data]
+        self.assertIn("Mass Background ROI", names)
+        self.assertTrue(
+            any(name in ("Mass ROI (Pass)", "Mass ROI (Fail)") for name in names)
+        )
+        self.assertIn("Speck Group ROI", names)
+        self.assertIn("Visible Speck", names)
+        self.assertIn("Fiber ROI", names)
+        self.assertIn("Fiber Boundary", names)
+
+    def test_plotly_speck_group_graph(self):
+        figs = self.instance.plotly_analyzed_images(show=False)
+        fig = figs["Speck Group"]
+        names = {trace.name for trace in fig.data}
+        self.assertIn("Specks Visible", names)
+        self.assertIn("Half Score Threshold", names)
+        self.assertIn("Full Score Threshold", names)
+        self.assertIn("Group Score", names)
+        group_trace = next(trace for trace in fig.data if trace.name == "Group Score")
+        self.assertEqual(group_trace.yaxis, "y2")
+
+    def test_plotly_fiber_graph_scores(self):
+        figs = self.instance.plotly_analyzed_images(show=False)
+        trace = figs["Fiber"].data[0]
+        scores = list(trace.y)
+        self.assertEqual(len(scores), 6)
+        self.assertTrue(set(scores).issubset({0, 0.5, 1}))
+
+    def test_plotly_show_legend_false(self):
+        figs = self.instance.plotly_analyzed_images(
+            show=False,
+            show_legend=False,
+            show_colorbar=False,
+        )
+        self.assertTrue(all(isinstance(fig, go.Figure) for fig in figs.values()))
+        for fig in figs.values():
+            self.assertNotEqual(fig.layout.showlegend, True)
+            for trace in fig.data:
+                if trace.showlegend is not None:
+                    self.assertFalse(trace.showlegend)
 
     def test_saving_to_stream(self):
         # save as stream
@@ -1307,7 +1474,13 @@ class ACRDigitalMammographyTestMixin(PlanarPhantomMixin):
         os.chdir(tmpdir)
         self.instance.save_analyzed_image(to_stream=False)
         files = list(Path(tmpdir).glob(pattern="ACR_mammography_*.png"))
-        self.assertEqual(len(files), 22)
+        expected_num_figs = self.expected_num_figs or (
+            4
+            + len(self.instance.low_contrast_rois)
+            + len(self.instance.speck_groups)
+            + len(self.instance.fibers)
+        )
+        self.assertEqual(len(files), expected_num_figs)
 
 
 class ACRDigitalMammographyDemo(ACRDigitalMammographyTestMixin, TestCase):
@@ -1353,6 +1526,88 @@ class ACRDigitalMammographySlightlyRotatedLowExposure(
     rois_seen = 3
     speck_group_score = 3.0
     fiber_score = 3.0
+
+
+class SmallACRMammographyConfiguration(TestCase):
+    def test_configuration(self):
+        self.assertTrue(issubclass(SmallACRMammography, ACRDigitalMammography))
+        self.assertIs(smallAcRMammography, SmallACRMammography)
+        self.assertEqual(SmallACRMammography.common_name, "Small ACR Mammography")
+        self.assertEqual(len(SmallACRMammography.low_contrast_roi_settings), 5)
+        self.assertEqual(
+            len(SmallACRMammography.low_contrast_background_roi_settings), 5
+        )
+        self.assertEqual(len(SmallACRMammography.speck_group_roi_settings), 5)
+        self.assertEqual(len(SmallACRMammography.fibers_roi_settings), 6)
+        outline = SmallACRMammography.phantom_outline_object["Rectangle"]
+        self.assertEqual(outline["width ratio"], outline["height ratio"])
+
+    def test_component_geometry_orientation(self):
+        mass_y_offsets = [
+            settings["y offset"]
+            for settings in SmallACRMammography.low_contrast_roi_settings.values()
+        ]
+        speck_y_offsets = [
+            settings["y offset"]
+            for settings in SmallACRMammography.speck_group_roi_settings.values()
+        ]
+        fiber_x_offsets = [
+            settings["x offset"]
+            for settings in SmallACRMammography.fibers_roi_settings.values()
+        ]
+        fiber_y_offsets = [
+            settings["y offset"]
+            for settings in SmallACRMammography.fibers_roi_settings.values()
+        ]
+
+        self.assertEqual(mass_y_offsets, sorted(mass_y_offsets))
+        self.assertEqual(speck_y_offsets, sorted(speck_y_offsets))
+        self.assertEqual(fiber_x_offsets, sorted(fiber_x_offsets))
+        self.assertEqual(fiber_y_offsets, sorted(fiber_y_offsets, reverse=True))
+
+    def test_square_region_detection_does_not_require_exact_size(self):
+        edge_image = np.zeros((300, 300), dtype=bool)
+        edge_image[20:220, 20] = True
+        edge_image[20:220, 70] = True
+        edge_image[20, 20:70] = True
+        edge_image[219, 20:70] = True
+        edge_image[80:180, 100] = True
+        edge_image[80:180, 199] = True
+        edge_image[80, 100:200] = True
+        edge_image[179, 100:200] = True
+        regions = measure.regionprops(
+            measure.label(edge_image), intensity_image=edge_image.astype(float)
+        )
+
+        class FakeImage:
+            shape = (300, 300)
+            dpmm = 2
+            sad = 1000
+
+        instance = SmallACRMammography.__new__(SmallACRMammography)
+        instance.image = FakeImage()
+        instance._ssd = 1000
+        instance._get_canny_regions = lambda: regions
+
+        self.assertEqual(instance.phantom_ski_region.bbox, (80, 100, 180, 200))
+
+
+class SmallACRMammographyTestMixin(ACRDigitalMammographyTestMixin):
+    klass = SmallACRMammography
+    expected_num_figs = 20
+    instance: SmallACRMammography
+
+
+class SmallACRMammographyLocal(SmallACRMammographyTestMixin, TestCase):
+    @classmethod
+    def create_instance(cls):
+        filename = os.environ.get("PYLINAC_SMALL_ACR_MAMMOGRAPHY_FILE")
+        if not filename:
+            raise SkipTest(
+                "Set PYLINAC_SMALL_ACR_MAMMOGRAPHY_FILE to a square ACR "
+                "mammography DICOM path to run the full small ACR test."
+            )
+        return cls.klass(filename)
 
 
 class TestLasVegasResultsData(ResultsDataBase, TestCase):
