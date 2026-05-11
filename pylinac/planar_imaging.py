@@ -4950,10 +4950,10 @@ class SmallACRMammography(ACRDigitalMammography):
             "fiber_orientation": -45,
         },
         "roi 2": { #perfect
-            "x offset": -28,
+            "x offset": -27.5,
             "y offset": -7.5,
-            "size": 14.0,
-            "fiber_diameter": 0.77,
+            "size": 15.0,
+            "fiber_diameter": 1.52,
             "fiber_orientation": 45,
         },
         "roi 3": { #perfect
