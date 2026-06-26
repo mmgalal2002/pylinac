@@ -59,6 +59,27 @@ class LoadingBase(FromURLTesterMixin, FromDemoImageTesterMixin):
             instance = self.klass(image_paths=(s1, s2))
         self.assertIsInstance(instance, self.klass)
 
+    def test_swap_image_order(self):
+        one = get_file_from_cloud_test_repo([TEST_DIR, "no_test_or_image_type_1.dcm"])
+        two = get_file_from_cloud_test_repo([TEST_DIR, "no_test_or_image_type_2.dcm"])
+
+        instance = self.klass(image_paths=(one, two))
+        self.assertEqual(instance.open_image.path, two)
+        self.assertEqual(instance.dmlc_image.path, one)
+
+        instance = self.klass(image_paths=(one, two))
+        try:
+            # The DRCS analysis will fail with
+            # such a config, but all we want is to
+            # test the image order, so swallowing
+            # is fine here for the purpose of the test
+            # and the swap is still tested
+            instance.analyze(invert_image_order=True)
+        except Exception:
+            pass
+        self.assertEqual(instance.open_image.path, one)
+        self.assertEqual(instance.dmlc_image.path, two)
+
     def test_passing_3_images_fails(self):
         """Test passing the wrong number of images."""
         with self.assertRaises(ValueError):
@@ -124,7 +145,10 @@ class ResultsBase:
 
     def test_results_warnings(self):
         data = self.instance.results_data()
-        self.assertEqual(len(data.warnings), 0)
+        self.assertIsInstance(data.warnings, list)
+        for w in data.warnings:
+            self.assertIn("message", w)
+            self.assertIn("category", w)
 
     def test_results_preprocess(self):
         instance = self.klass.from_demo_images()
@@ -150,7 +174,11 @@ class TestDRMLCResults(ResultsBase, TestCase):
 
 class TestDRCSResults(ResultsBase, TestCase):
     klass = DRCS
-    results_length = 11
+    results_length = 12
+
+    def test_rotation_offset_in_results_data(self):
+        data_dict = self.instance.results_data(as_dict=True)
+        self.assertIn("rotation_offset_deg", data_dict)
 
 
 # endregion
@@ -624,6 +652,59 @@ class TestHalcyonDRGS3(VMATMixin, TestCase):
     passes = False
 
 
+class TestDRGSElekta1(VMATMixin, TestCase):
+    """Regression test for RAM-6028."""
+
+    klass = DRGS
+    passes = False
+    filepaths = ("Elekta1.zip",)
+    is_zip = True
+    analyze_kwargs = {"invert_image_order": True}
+    segment_positions = {
+        0: Point(272.6, 511.5),
+        3: Point(512.0, 511.5),
+        6: Point(751.4, 511.5),
+    }
+    segment_values = {
+        0: {"r_dev": 8.18, "r_corr": 21.17},
+        3: {"r_dev": -10.2, "r_corr": 17.57},
+        6: {"r_dev": 8.43, "r_corr": 21.22},
+    }
+    avg_abs_r_deviation = 10.21
+    max_r_deviation = 14.81
+
+    def test_field_center_fallback_warning(self):
+        fallback_warning_message = (
+            "The detected VMAT field center is outside the center third of the image; "
+            "using the image center instead."
+        )
+        warning_messages = [
+            warning["message"] for warning in self.vmat.results_data().warnings
+        ]
+        self.assertIn(fallback_warning_message, warning_messages)
+
+
+class TestDRGSElekta2(VMATMixin, TestCase):
+    """Regression test for RAM-6028."""
+
+    klass = DRGS
+    passes = False
+    filepaths = ("Elekta2.zip",)
+    is_zip = True
+    segment_positions = {
+        0: Point(277.0, 511.5),
+        3: Point(517.0, 511.5),
+        6: Point(757.0, 511.5),
+    }
+    segment_values = {
+        0: {"r_dev": 10.71, "r_corr": 14.71},
+        3: {"r_dev": -13.6, "r_corr": 11.48},
+        6: {"r_dev": 10.59, "r_corr": 14.69},
+    }
+    avg_abs_r_deviation = 11.4
+    max_r_deviation = 15.06
+
+
 class TestContrivedWideGapTest(VMATMixin, TestCase):
     """A contrived test with a wide gap between the segments."""
 
@@ -710,6 +791,14 @@ class TestDRCS(VMATMixin, PlotlyTestMixin, TestCase):
     def test_generate_results(self):
         results = self.instance._generate_results_data()
         self.assertEqual(6, len(results.collimator_data))
+        expected = np.mean(
+            [
+                collimator.angle_deviation
+                for collimator in results.collimator_data.values()
+            ]
+        )
+        self.assertEqual(results.rotation_offset_deg, expected)
+        self.assertAlmostEqual(results.rotation_offset_deg, -0.16, delta=0.02)
 
     def test_spoke_config_reordered(self):
         baseline_drcs = DRCS.from_demo_images()

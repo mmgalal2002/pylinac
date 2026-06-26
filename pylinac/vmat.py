@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import enum
 import math
+import warnings
 import webbrowser
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -128,6 +129,10 @@ class VMATResult(ResultBase):
 
 
 class DRCSResult(VMATResult):
+    rotation_offset_deg: float = Field(
+        description="The signed mean of the collimator angle deviations.",
+        title="Rotation Offset (deg)",
+    )
     # this is implicitly a named_collimator_data field
     collimator_data: dict[str, CollimatorResult] = Field(
         description="List of individual collimator deviation data"
@@ -306,6 +311,7 @@ class VMATBase(ABC, ResultsDataMixin[VMATResult], QuaacMixin):
         tolerance: float | int = 1.5,
         segment_size_mm: tuple | None = None,
         roi_config: dict | None = None,
+        invert_image_order: bool = False,
     ):
         """Analyze the open and DMLC field VMAT images, according to 1 of 2 possible tests.
 
@@ -318,11 +324,17 @@ class VMATBase(ABC, ResultsDataMixin[VMATResult], QuaacMixin):
             The (width, height) of the ROI segments in mm.
         roi_config : dict
             A dict of the ROI settings. The keys are the names of the ROIs and each value is a dict containing the offset in mm 'offset_mm'.
+        invert_image_order : bool, optional
+            If ``True``, swap the automatically-identified open and DMLC images.
+            Use this option when automatic identification fails.
+            Defaults to ``False``.
         """
         if segment_size_mm is None:
             segment_size_mm = self.default_segment_size_mm
         if roi_config is None:
             roi_config = self.default_roi_config
+        if invert_image_order:
+            self.open_image, self.dmlc_image = self.dmlc_image, self.open_image
 
         self._tolerance = tolerance / 100
         self.roi_config = roi_config
@@ -693,6 +705,8 @@ class VMATBase(ABC, ResultsDataMixin[VMATResult], QuaacMixin):
             f"Absolute mean deviation (%): {self.avg_abs_r_deviation:2.2f}",
             f"Maximum deviation (%): {self.max_r_deviation:2.2f}",
         ]
+        if hasattr(self, "rotation_offset_deg"):
+            text.append(f"Rotation offset (deg): {self.rotation_offset_deg:2.2f}")
         canvas.add_text(text=text, location=(10, 25.5))
         if notes is not None:
             canvas.add_text(text="Notes:", location=(1, 5.5), font_size=14)
@@ -802,6 +816,14 @@ class VMATLinearBase(VMATBase, ABC):
         y = self.open_image.center.y
         _, open_prof = self._roi_profiles(self.dmlc_image, self.open_image)
         x_field_center = round(open_prof.center_idx)
+        image_width = self.dmlc_image.shape[1]
+        if not (image_width / 3 <= x_field_center <= image_width * 2 / 3):
+            warnings.warn(
+                "The detected VMAT field center is outside the center third of the "
+                "image; using the image center instead.",
+                UserWarning,
+            )
+            x_field_center = round(self.open_image.center.x)
         dpmm = self.open_image.dpmm
         for roi_data in self.roi_config.values():
             x_offset_mm = roi_data["offset_mm"]
@@ -907,6 +929,11 @@ class DRCS(VMATBase):
     def default_collimator_radial_distances(self) -> tuple[float, float]:
         return 30, 70  # mm
 
+    @property
+    def rotation_offset_deg(self) -> float:
+        """Return the signed average of all collimator angle deviations."""
+        return float(np.mean([cd.angle_deviation for cd in self.collimator_deviations]))
+
     def analyze(
         self,
         tolerance: float | int = 1.5,  # Segments, in %
@@ -914,6 +941,7 @@ class DRCS(VMATBase):
         roi_config: dict | None = None,
         collimator_radial_distances: tuple[float, float] | None = None,
         collimator_config: dict | None = None,
+        invert_image_order: bool = False,
     ):
         """Analyze DRCS images and compute segment and spoke deviations.
 
@@ -933,8 +961,17 @@ class DRCS(VMATBase):
         collimator_config
             Mapping of spoke label to nominal angle in degrees. If ``None``,
             uses :attr:`default_collimator_config`.
+        invert_image_order : bool, optional
+            If ``True``, swap the automatically-identified open and DMLC images.
+            Use this option when automatic identification fails.
+            Defaults to ``False``.
         """
-        super().analyze(tolerance, segment_size_mm, roi_config)
+        super().analyze(
+            tolerance,
+            segment_size_mm,
+            roi_config,
+            invert_image_order=invert_image_order,
+        )
         cc = collimator_config or self.default_collimator_config
         crd = collimator_radial_distances or self.default_collimator_radial_distances
         self._calculate_collimator_deviations(cc, crd)
@@ -996,8 +1033,19 @@ class DRCS(VMATBase):
             passed=self.passed,
             segment_data=segment_data,
             named_segment_data=named_segment_data,
+            rotation_offset_deg=self.rotation_offset_deg,
             collimator_data=coll_data,
         )
+
+    def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
+        """Add rotation offset (DRCS-specific) to Quaac data"""
+        results_data = self.results_data(as_dict=True)
+        data = super()._quaac_datapoints()
+        data["Rotation Offset"] = QuaacDatum(
+            value=results_data["rotation_offset_deg"],
+            unit="deg",
+        )
+        return data
 
     def _calculate_segments(self, segment_size_mm: tuple[float, float]):
         """Calculate the segments based on ROI config.

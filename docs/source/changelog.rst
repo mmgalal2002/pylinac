@@ -10,6 +10,47 @@ Legend
 * :bdg-primary:`Refactor` denotes a code refactor; usually this means an efficiency boost or code cleanup.
 * :bdg-danger:`Change` denotes a change that may break existing code.
 
+v3.45.0
+-------
+
+VMAT
+^^^^
+
+* :bdg-success:`Feature` Added ``invert_image_order`` parameter to VMAT classes (DRGS, DRMLC, DRCS)
+  to allow users to swap the automatically-detected open/DMLC image assignment when automatic
+  identification fails.
+* :bdg-success:`Feature` The DRCS VMAT analysis now outputs the mean collimator angle deviation from nominal in ``results_data``
+  under the ``rotation_offset_deg`` value.
+* :bdg-warning:`Fixed` VMAT data sets that extend to the edge of the EPID Could cause the ROI locations to be far off to the side and
+   erroneous. There is now a fallback that if the center of the open field is not in the center one-third of the image,
+   a warning is emitted and the center of the image is then used. This is yet again for Elekta machines.
+
+Quart
+^^^^^
+
+* :bdg-warning:`Fixed` :class:`~pylinac.quart.QuartDVT` phantom roll detection now
+  uses a narrower air bubble detection to avoid selecting the lateral HU ROI.
+  Separately, if the detected roll is too large (>10 degrees), a ``UserWarning``
+  is emitted and the roll is reset to 0 to avoid incorrect ROI placement.
+
+Winston-Lutz
+^^^^^^^^^^^^
+
+* :bdg-danger:`Change` Winston-Lutz now raises an error by default when a gantry,
+  collimator, or couch axis value cannot be determined from ``axis_mapping``, from DICOM metadata (when not using
+  filenames), or from the filename (when ``use_filenames=True``). When using filenames, a missing axis keyword does
+  not fall back to DICOM metadata. Previously, missing axis values silently defaulted to 0. This is out an abundance
+  of caution to ensure that 3D WL output metrics are accurate; not due to algorithm differences but silent assumptions
+  about axis values. 2D/individual image metrics such as the maximum 2D distance is not impacted.
+  Typically this happens for Elekta because DICOM values are not present. Varian users should not have any impact.
+  To restore the previous behavior for backwards compatibility, pass
+  ``missing_axis_value=0`` when loading:
+
+  .. code-block:: python
+
+      wl = WinstonLutz("path/to/wl", missing_axis_value=0)
+      wl = WinstonLutz.from_zip("path/to/wl.zip", missing_axis_value=0)
+
 v 3.44.0
 --------
 
@@ -84,6 +125,8 @@ General
 * :bdg-success:`Feature` CT-like modules that have the ``plotly_side_view`` and ``plot_side_view``
   methods now accept ``kwargs`` that are passed to the visualization method. This allows for more customization, such as
   the above change setting the visualization thresholds.
+* :bdg-warning:`Fixed` The ``warnings`` capture in ``results_data`` was not working properly and has been fixed.
+  This usage is primarily for RadMachine. Library users will still see any runtime warnings in the console.
 
 Geometry
 ^^^^^^^^
