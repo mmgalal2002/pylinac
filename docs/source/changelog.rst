@@ -10,8 +10,41 @@ Legend
 * :bdg-primary:`Refactor` denotes a code refactor; usually this means an efficiency boost or code cleanup.
 * :bdg-danger:`Change` denotes a change that may break existing code.
 
+v3.48.0
+-------
+
+Calibration
+^^^^^^^^^^^
+
+* :bdg-success:`Feature` TG-51 chamber models can now be selected with
+  :class:`~pylinac.calibration.tg51.IonChambers`. Each frozen
+  :class:`~pylinac.calibration.tg51.IonChamber` contains its available photon and
+  electron coefficients, and custom chambers can be constructed directly. Existing
+  string chamber names remain fully supported. This is to make IDE discovery easier
+  and clearer to read.
+* :bdg-success:`Feature` TG-51 lead foil positions can now be selected with
+  :class:`~pylinac.calibration.tg51.LeadFoil`; legacy string values remain supported.
+
 v3.47.0
 -------
+
+Winston-Lutz
+^^^^^^^^^^^^
+
+* :bdg-success:`Feature` Winston-Lutz ``results_data`` now includes the
+  virtual shift values as ``virtual_shift_applied`` when analyzing with
+  ``apply_virtual_shift=True``.
+* :bdg-success:`Feature` Multi-target, multi-field Winston-Lutz ``results_data``
+  now includes per-image axis angles, BB-to-field distances, and couch yaw errors
+  under the key ``image_details``.
+
+Quart
+^^^^^
+
+* :bdg-success:`Feature` Quart ``results_data`` now include
+  the ``uniformity_index``, ``integral_non_uniformity``, ``nps_avg_power``, and
+  ``nps_max_freq`` under the ``uniformity_module`` to provide more uniformity metrics for evaluation.
+* :bdg-warning:`Fixed` Quart phantoms with minimum HU values below -1000 would error out on analysis.
 
 ACR Phantoms
 ^^^^^^^^^^^^

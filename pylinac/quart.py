@@ -98,6 +98,20 @@ class QuartUniformityModuleOutput(BaseModel):
     )
     roi_settings: dict = Field(description="A dictionary of the ROI settings.")
     rois: dict = Field(description="A dictionary of ROI results.")
+    uniformity_index: float = Field(
+        description="The uniformity index as defined in Equation 2 of Elstrom et al.",
+        title="Uniformity Index",
+    )
+    integral_non_uniformity: float = Field(
+        description="The integral non-uniformity as defined in Equation 1 of Elstrom et al.",
+        title="Integral Non-Uniformity",
+    )
+    nps_avg_power: float = Field(
+        description="The average power of the noise power spectrum."
+    )
+    nps_max_freq: float = Field(
+        description="The most populous frequency of the noise power spectrum."
+    )
     passed: bool = Field(description="A boolean indicating if the module passed.")
 
 
@@ -346,7 +360,6 @@ class QuartGeometryModule(CatPhanModule):
             self.image.array.copy()
         )  # we copy so we don't overwrite the existing image pixels
         img = scipy.ndimage.median_filter(img, size=3)
-        img = img - img.min()  # ground the profile
         # calculate horizontal
         self.horiz_array = img[int(self.phan_center.y), :]
         prof = FWXMProfilePhysical(
@@ -393,18 +406,17 @@ class QuartGeometryModule(CatPhanModule):
 
         This calculates the distance on each edge of the horizontal and vertical
         geometric profiles for a total of 4 measurements. The result is the
-        average of the 4 values. The DICOM data is already HU-corrected so
-        -1000 => 0. This means we will search for 300 HU (-1000 + 700) and 800 HU (-1000 + 200) respectively.
+        average of the 4 values.
 
         This cuts the profile in half, searches for the highest-gradient index (where the phantom edge is),
-        then further cuts it down to +/-10 pixels. The 300/800 HU are then found from linear interpolation.
+        then further cuts it down to +/-10 pixels. The -700/-200 HU are then found from linear interpolation.
         It was found that artifacts in the image could drastically influence these values, so hence the +/-10
         subset.
 
         Assumptions:
         -The phantom does not cross the halfway point of the image FOV (i.e. not offset by an obscene amount).
         -10 pixels about the phantom edge is adequate to capture the full dropoff.
-        -300 and 800 HU values will be in the profile"""
+        -(-200) and -700 HU values will be in the profile"""
         dists = {"Top": np.nan, "Bottom": np.nan, "Left": np.nan, "Right": np.nan}
         edge_5mm = int(5 / self.mm_per_pixel)  # physical 5mm distance
         keys = (key for key in dists)
@@ -416,8 +428,8 @@ class QuartGeometryModule(CatPhanModule):
                 edge_idx = np.argmax(np.diff(profile_data))
                 edge_data = profile_data[edge_idx - edge_5mm : edge_idx + edge_5mm]
                 interp_func = interp1d(edge_data, np.arange(len(edge_data)))
-                idx_300, idx_800 = interp_func([300, 800])
-                dists[next(keys)] = abs(idx_800 - idx_300) * self.mm_per_pixel
+                idx_700, idx_200 = interp_func([-700, -200])
+                dists[next(keys)] = abs(idx_200 - idx_700) * self.mm_per_pixel
         return dists
 
     def mean_high_contrast_resolution(self) -> float:
@@ -667,7 +679,11 @@ class QuartDVT(CatPhanBase, ResultsDataMixin[QuartDVTResult]):
             f"Measured Slice Thickness (mm): {self.hu_module.meas_slice_thickness:2.3f}\n",
             f"Slice Thickness Passed? {self.hu_module.passed_thickness}\n",
             f"Uniformity ROIs: {self.uniformity_module.roi_vals_as_str}\n",
+            f"Uniformity index: {self.uniformity_module.uniformity_index:2.3f}\n",
+            f"Integral non-uniformity: {self.uniformity_module.integral_non_uniformity:2.4f}\n",
             f"Uniformity Passed?: {self.uniformity_module.overall_passed}\n",
+            f"Max Noise Power frequency: {self.uniformity_module.max_noise_power_frequency}\n",
+            f"Average Noise Power: {self.uniformity_module.avg_noise_power}\n",
             f"Geometric width: {self.geometry_module.distances()}",
             f"High-Contrast distance (mm): {self.geometry_module.mean_high_contrast_resolution():2.3f}",
         )
@@ -687,6 +703,10 @@ class QuartDVT(CatPhanBase, ResultsDataMixin[QuartDVTResult]):
                 offset=UNIFORMITY_OFFSET_MM,
                 roi_settings=self.uniformity_module.roi_settings,
                 rois=rois_to_results(self.uniformity_module.rois),
+                uniformity_index=self.uniformity_module.uniformity_index,
+                integral_non_uniformity=self.uniformity_module.integral_non_uniformity,
+                nps_avg_power=self.uniformity_module.avg_noise_power,
+                nps_max_freq=self.uniformity_module.max_noise_power_frequency,
                 passed=self.uniformity_module.overall_passed,
             ),
             geometric_module=QuartGeometryModuleOutput(

@@ -533,11 +533,32 @@ class WinstonLutzResult(ResultBase):
     bb_shift_vector: VectorSerialized = Field(
         description="The Cartesian vector that would move the BB to the radiation isocenter. Each value is in mm."
     )
+    virtual_shift_applied: VectorSerialized | None = Field(
+        default=None,
+        title="Virtual shift applied (mm)",
+        description="The virtual shift applied to the BB to place it at isocenter in mm. The x, y, and z values represent the lateral, longitudinal, and vertical shifts, respectively.",
+    )
     image_details: list[WinstonLutz2DResult] = Field(
         description="A list of the individual image results.",
     )
     keyed_image_details: dict[str, WinstonLutz2DResult] = Field(
         description="A **dictionary** of the individual image results. This is the same as ``image_details`` but keyed by the images using the axes values as the key. E.g. ``G0B45P0``. This can be used to identify individual images vs those in ``image_details``."
+    )
+
+
+class WinstonLutzMultiTargetMultiFieldImageResult(BaseModel):
+    """Structured results for one multi-target, multi-field image."""
+
+    image_name: str = Field(description="The image basename or identifier.")
+    gantry_angle: float = Field(description="The gantry angle in degrees.")
+    collimator_angle: float = Field(description="The collimator angle in degrees.")
+    couch_angle: float = Field(description="The couch angle in degrees.")
+    bb_distances: dict[str, float | None] = Field(
+        description="The 2D distance from each expected BB to its matched field center in mm. The key is the BB name and the value is None when the BB was not matched."
+    )
+    couch_yaw_error: float | None = Field(
+        default=None,
+        description="The couch yaw error in degrees for couch and reference images. This is None for other image types.",
     )
 
 
@@ -580,6 +601,9 @@ class WinstonLutzMultiTargetMultiFieldResult(ResultBase):
     )
     bb_shift_roll: float = Field(
         description="The roll rotation needed in degrees to align the phantom with the radiation isocenter."
+    )
+    image_details: list[WinstonLutzMultiTargetMultiFieldImageResult] = Field(
+        description="A list of the individual image results in analyzed-image order."
     )
 
 
@@ -1241,7 +1265,7 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
     bb: BB3D  # 3D representation of the BB; there is a .bb object for 2D images but is a 2D representation
     is_from_cbct: bool = False
     _bb_diameter: float
-    _virtual_shift: str | None = None
+    _virtual_shift: Vector | None = None
     detection_conditions: list[callable] = [
         is_right_size_bb,
         is_round,
@@ -1584,9 +1608,10 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
             bb_matches=[img.arrangement_matches["Iso"] for img in self.images],
             scale=self.machine_scale,
         )
+        self._virtual_shift = None
         if apply_virtual_shift:
             shift = self.bb_shift_vector
-            self._virtual_shift = self.bb_shift_instructions()
+            self._virtual_shift = shift
             for img in self.images:
                 img.analyze(
                     bb_size_mm=bb_size_mm,
@@ -1729,7 +1754,22 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
         couch_lat : float
             The current couch lateral position in cm.
         """
-        sv = self.bb_shift_vector
+        return self._format_bb_shift_instructions(
+            self.bb_shift_vector,
+            couch_vrt=couch_vrt,
+            couch_lng=couch_lng,
+            couch_lat=couch_lat,
+        )
+
+    @staticmethod
+    def _format_bb_shift_instructions(
+        shift_vector: Vector,
+        couch_vrt: float | None = None,
+        couch_lng: float | None = None,
+        couch_lat: float | None = None,
+    ) -> str:
+        """Format a shift vector as human-readable couch instructions."""
+        sv = shift_vector
         x_dir = "LEFT" if sv.x < 0 else "RIGHT"
         y_dir = "IN" if sv.y > 0 else "OUT"
         z_dir = "UP" if sv.z > 0 else "DOWN"
@@ -2525,7 +2565,8 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
         ]
         if self._virtual_shift:
             result.append(
-                f"Virtual shift applied to BB to place at isocenter: {self._virtual_shift}"
+                "Virtual shift applied to BB to place at isocenter: "
+                f"{self._format_bb_shift_instructions(self._virtual_shift)}"
             )
         else:
             result.append(
@@ -2586,6 +2627,7 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
             ),
             max_epid_rms_deviation_mm=max(self.axis_rms_deviation(axis=Axis.EPID)),
             bb_shift_vector=self.bb_shift_vector,
+            virtual_shift_applied=self._virtual_shift,
             image_details=individual_image_data,
             keyed_image_details=self._generate_keyed_images(individual_image_data),
         )
@@ -3207,6 +3249,30 @@ class WinstonLutzMultiTargetMultiField(WinstonLutz):
             bb_maxes[bb.name] = max_d
 
         translation, yaw, pitch, roll = self.bb_shift_vector
+        # build individual image details
+        couch_rotation_errors = self._couch_rotation_error()
+        image_details = []
+        for img in self.images:
+            couch_result = couch_rotation_errors.get(img.base_path)
+            image_details.append(
+                WinstonLutzMultiTargetMultiFieldImageResult(
+                    image_name=img.base_path,
+                    gantry_angle=img.gantry_angle,
+                    collimator_angle=img.collimator_angle,
+                    couch_angle=img.couch_angle,
+                    bb_distances={
+                        bb.name: (
+                            img.arrangement_matches[bb.name].bb_field_distance_mm
+                            if bb.name in img.arrangement_matches
+                            else None
+                        )
+                        for bb in self.bb_arrangement
+                    },
+                    couch_yaw_error=(
+                        couch_result["yaw error"] if couch_result is not None else None
+                    ),
+                )
+            )
         return WinstonLutzMultiTargetMultiFieldResult(
             num_total_images=len(self.images),
             max_2d_field_to_bb_mm=self.max_bb_deviation_2d,
@@ -3218,6 +3284,7 @@ class WinstonLutzMultiTargetMultiField(WinstonLutz):
             bb_shift_yaw=yaw,
             bb_shift_pitch=pitch,
             bb_shift_roll=roll,
+            image_details=image_details,
         )
 
     def plot_summary(self, show: bool = True, fig_size: tuple | None = None):
