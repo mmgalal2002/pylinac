@@ -23,7 +23,11 @@ import argue
 import matplotlib.pyplot as plt
 import numpy as np
 import pydicom
-import pydicom.pixel_data_handlers as pixels
+
+try:
+    from pydicom.pixels import apply_rescale  # type: ignore[import-not-found]
+except ImportError:  # pragma: no cover - compatibility with pydicom < 3
+    from pydicom.pixel_data_handlers import apply_rescale
 import scipy.ndimage as spf
 from PIL import Image as pImage
 from PIL.PngImagePlugin import PngInfo
@@ -376,7 +380,7 @@ def _rescale_dicom_values(
         return unscaled_array
 
     # this is the same as scaled_array = unscaled_array * rescale_intercept + rescale_slope, but pydicom tests for the tags
-    scaled_array = pixels.apply_rescale(unscaled_array, metadata)
+    scaled_array = apply_rescale(unscaled_array, metadata)
 
     pixel_intensity_relationship_sign = metadata.get("PixelIntensityRelationshipSign")
     if invert_pixels or (
