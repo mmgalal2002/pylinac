@@ -24,6 +24,7 @@
    acr
    cheese
    helios
+   ge_ct_qa
    quart
    log_analyzer
    picketfence
