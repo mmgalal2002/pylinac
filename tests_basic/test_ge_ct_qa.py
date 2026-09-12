@@ -120,6 +120,18 @@ class TestGECTQA(TestCase):
         self.assertIsInstance(qa.results_data(as_dict=True), dict)
         self.assertIsInstance(qa.results_data(as_json=True), str)
 
+    def test_default_profile_includes_ge_references_and_helios_metrics(self) -> None:
+        qa = GECTQA(self.folder)
+        qa.analyze(angle_override=0)
+        data = qa.results_data()
+
+        self.assertIn("GE CT Technical Reference Manual", data.reference.source)
+        self.assertEqual(data.reference.plexiglass_water_difference_hu, 120)
+        self.assertIn("not explicitly Optima", data.reference.scanner_reference_status)
+        self.assertTrue(data.helios_compatibility.available)
+        self.assertIsNotNone(data.helios_compatibility.high_contrast)
+        self.assertEqual(data.slice_thickness.acquired_slice_thickness_mm, 2.5)
+
     def test_single_file_and_zip(self) -> None:
         single = GECTQA(self.folder / "slice_1.dcm")
         single.analyze(angle_override=0)
@@ -160,8 +172,8 @@ class TestGECTQA(TestCase):
         qa = GECTQA(self.folder, config=measurement_config())
         qa.analyze(angle_override=0)
         figure = qa.plot_analyzed_image(show=False)
-        self.assertEqual(len(figure.axes), 2)
-        self.assertEqual(len(qa.plotly_analyzed_images(show=False)), 2)
+        self.assertEqual(len(figure.axes), 6)
+        self.assertEqual(len(qa.plotly_analyzed_images(show=False)), 5)
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as report:
             report_name = report.name
         try:
