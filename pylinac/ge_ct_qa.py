@@ -35,7 +35,6 @@ from .core.roi import DiskROI, RectangleROI
 from .core.utilities import QuaacDatum, QuaacMixin, ResultBase, ResultsDataMixin
 from .core.warnings import capture_warnings
 
-
 GE_QA_REFERENCE_SOURCE = (
     "GE CT Technical Reference Manual 5800010-1ENr2, Chapter 12, Quality Assurance"
 )
@@ -83,7 +82,7 @@ def _roi_from_setting(settings: dict[str, float]) -> GECTQAROI:
         x_mm=np.cos(np.deg2rad(settings["angle_deg"])) * settings["distance_mm"],
         y_mm=np.sin(np.deg2rad(settings["angle_deg"])) * settings["distance_mm"],
         width_mm=settings["width_mm"],
-        height_mm=settings["height_mm"],
+        height_mm=settings.get("height_mm", settings["width_mm"]),
     )
 
 
@@ -199,7 +198,7 @@ class GECTQAConfig(BaseModel):
     expected_diameter_range_mm: tuple[float, float] = (200.0, 215.0)
     section1_location_mm: float = GE_QA_SECTION_1_LOCATION_MM
     section3_location_mm: float = GE_QA_SECTION_3_LOCATION_MM
-    automatic_module_detection: bool = True
+    automatic_module_detection: bool = False
     use_helios_compatibility: bool = True
     ct_number_offset_mm: float = 0
     ct_number_rois: dict[str, GECTQAMaterialROI] = Field(default_factory=dict)
@@ -249,6 +248,7 @@ class GECTQAConfig(BaseModel):
         }
         return cls(
             reference_source=GE_QA_REFERENCE_SOURCE,
+            automatic_module_detection=True,
             ct_number_rois={
                 "Plexiglass": _rectangular_roi(contrast_rois["Plexiglass"]),
                 "Water": _rectangular_roi(
@@ -503,6 +503,7 @@ class GECTQAReference(BaseModel):
     high_contrast_1_6mm_tolerance_hu: float
     high_contrast_bar_sizes_mm: tuple[float, ...]
     positioning_tolerance_mm: float
+    scanner_reference_status: str
     clinical_status: str = "public reference; local clinical validation required"
 
 
@@ -804,6 +805,13 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         return len(self.dicom_stack)
 
     @property
+    def module_locations(self) -> GECTQAModuleLocations:
+        """Return detected GE module locations after analysis."""
+        if self._module_locations is None:
+            raise ValueError("The GE CT QA phantom has not been analyzed yet.")
+        return self._module_locations
+
+    @property
     def pixel_spacing(self) -> tuple[float, float]:
         """Return DICOM row and column spacing in millimetres."""
         return self._pixel_spacing(self.dicom_stack.metadatas[0])
@@ -1009,6 +1017,70 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             ),
         }
 
+    def _low_contrast_target_definitions(
+        self, slice_index: int
+    ) -> list[tuple[str, GECTQALowContrastTarget]]:
+        """Find compact circular contrast candidates in the selected slice."""
+        array = self._image_array(slice_index)
+        enhanced = ndimage.gaussian_filter(array, 1) - ndimage.gaussian_filter(
+            array, 6
+        )
+        row_spacing, column_spacing = self.pixel_spacing
+        yy, xx = np.indices(array.shape)
+        central_mask = (
+            (xx - self._current_localization.phantom_center_x_px) ** 2
+            + (yy - self._current_localization.phantom_center_y_px) ** 2
+            < (70 / np.mean(self.pixel_spacing)) ** 2
+        )
+        threshold = max(5.0, float(np.percentile(enhanced[central_mask], 95)))
+        regions = measure.regionprops(
+            measure.label((enhanced > threshold) & central_mask)
+        )
+        target_regions = [
+            region
+            for region in regions
+            if 80 <= region.area <= 350 and region.eccentricity < 0.85
+        ]
+        target_regions.sort(key=lambda region: (region.centroid[0], region.centroid[1]))
+        definitions = []
+        for number, region in enumerate(target_regions, start=1):
+            center_x, center_y = region.centroid[1], region.centroid[0]
+            radius_px = np.sqrt(region.area / np.pi)
+            definitions.append(
+                (
+                    f"candidate_{number}",
+                    GECTQALowContrastTarget(
+                        x_mm=(center_x - self._current_localization.phantom_center_x_px)
+                        * column_spacing,
+                        y_mm=(center_y - self._current_localization.phantom_center_y_px)
+                        * row_spacing,
+                        radius_mm=float(radius_px * np.mean(self.pixel_spacing)),
+                        target_size_mm=float(2 * radius_px * np.mean(self.pixel_spacing)),
+                    ),
+                )
+            )
+        return definitions
+
+    def _target_background_statistics(
+        self, array: np.ndarray, target_roi: DiskROI | RectangleROI
+    ) -> tuple[float, float]:
+        """Estimate local background statistics from an annulus around a target."""
+        yy, xx = np.indices(array.shape)
+        distance = np.sqrt(
+            (xx - target_roi.center.x) ** 2 + (yy - target_roi.center.y) ** 2
+        )
+        if isinstance(target_roi, DiskROI):
+            inner_radius = target_roi.radius * 1.5
+            outer_radius = target_roi.radius * 3.0
+        else:
+            inner_radius = max(target_roi.width, target_roi.height) * 0.75
+            outer_radius = max(target_roi.width, target_roi.height) * 1.5
+        values = array[(distance >= inner_radius) & (distance <= outer_radius)]
+        values = values[np.isfinite(values)]
+        if values.size == 0:
+            return float(np.mean(array)), float(np.std(array))
+        return float(np.mean(values)), float(np.std(values))
+
     def _detect_module_locations(self) -> GECTQAModuleLocations:
         """Detect the image slices that best represent the GE QA modules."""
         candidate_indices = self._localization_slice_indices or list(
@@ -1019,36 +1091,51 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             iter(high_definitions.values())
         )
         section1_scores: dict[int, float] = {}
-        center_scores: dict[int, float] = {}
         low_scores: dict[int, float] = {}
-        grid_cache: dict[int, dict[str, float | list[float]]] = {}
+        uniformity_scores: dict[int, float] = {}
         for slice_index in candidate_indices:
             try:
                 array = self._image_array(slice_index)
                 first_roi = self._create_roi(array, first_definition)
                 section1_scores[slice_index] = float(np.std(self._roi_pixels(first_roi)))
-                center_definition = GECTQAROI(
-                    x_mm=0,
-                    y_mm=0,
-                    width_mm=15,
-                    height_mm=15,
-                )
-                center_roi = self._create_roi(array, center_definition)
-                center_values = self._roi_pixels(center_roi)
                 grid = self._grid_statistics(slice_index)
-                grid_cache[slice_index] = grid
-                center_mean = float(np.mean(center_values))
-                center_scores[slice_index] = float(
-                    abs(center_mean - np.median(center_values))
-                    + np.std(center_values)
+                water_reference = (
+                    self.config.uniformity_reference_hu
+                    if self.config.uniformity_reference_hu is not None
+                    else 0.0
+                )
+                uniformity_scores[slice_index] = float(
+                    abs(float(grid["mean"]) - water_reference)
+                    + float(grid["std"])
+                )
+                enhanced = ndimage.gaussian_filter(array, 1) - ndimage.gaussian_filter(
+                    array, 6
+                )
+                central_mask = (
+                    (np.indices(array.shape)[1] - self._current_localization.phantom_center_x_px) ** 2
+                    + (np.indices(array.shape)[0] - self._current_localization.phantom_center_y_px) ** 2
+                    < (70 / np.mean(self.pixel_spacing)) ** 2
+                )
+                threshold = max(
+                    5.0,
+                    float(np.percentile(enhanced[central_mask], 95)),
+                )
+                regions = measure.regionprops(
+                    measure.label((enhanced > threshold) & central_mask)
+                )
+                circular_target_count = sum(
+                    80 <= region.area <= 350 and region.eccentricity < 0.85
+                    for region in regions
                 )
                 if -20 <= float(grid["mean"]) <= 180:
-                    low_scores[slice_index] = float(grid["high_cell_count"])
+                    low_scores[slice_index] = float(
+                        circular_target_count * 100 + float(grid["high_cell_count"])
+                    )
                 else:
                     low_scores[slice_index] = -1.0
             except (IndexError, ValueError):
                 section1_scores[slice_index] = -np.inf
-                center_scores[slice_index] = np.inf
+                uniformity_scores[slice_index] = np.inf
                 low_scores[slice_index] = -np.inf
 
         section1_slice = max(section1_scores, key=section1_scores.get)
@@ -1059,7 +1146,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         ] or candidate_indices
         uniformity_slice = min(
             uniformity_candidates,
-            key=lambda index: center_scores.get(index, np.inf),
+            key=lambda index: uniformity_scores.get(index, np.inf),
         )
         low_contrast_candidates = [
             index
@@ -1078,7 +1165,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             section1_score=float(section1_scores[section1_slice]),
             uniformity_slice_index=int(uniformity_slice),
             uniformity_physical_z_mm=float(self.z_positions[uniformity_slice]),
-            uniformity_score=float(center_scores[uniformity_slice]),
+            uniformity_score=float(uniformity_scores[uniformity_slice]),
             low_contrast_slice_index=int(low_contrast_slice),
             low_contrast_physical_z_mm=float(self.z_positions[low_contrast_slice]),
             low_contrast_score=float(low_scores[low_contrast_slice]),
@@ -1093,7 +1180,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             if not 0 <= requested < self.num_images:
                 raise ValueError("origin_slice is outside the loaded CT series.")
             return int(requested)
-        if self._module_locations is not None:
+        if self.config.automatic_module_detection and self._module_locations is not None:
             return self._module_locations.section1_slice_index
         if self.num_images == 1:
             return 0
@@ -1199,8 +1286,13 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         return all(values)
 
     @staticmethod
-    def _unavailable(result_type, reason: str):
-        return result_type(available=False, passed=None, reason=reason)
+    def _combine_known_passes(passes: Sequence[bool | None]) -> bool | None:
+        """Combine configured checks while ignoring metrics with no limit."""
+        known_values = [value for value in passes if value is not None]
+        return all(known_values) if known_values else None
+
+    def _unavailable(self, result_type, reason: str, **values):
+        return result_type(available=False, passed=None, reason=reason, **values)
 
     def _analyze_ct_number(self) -> GECTQACTNumberResult:
         if not self.config.ct_number_rois:
@@ -1208,7 +1300,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 GECTQACTNumberResult,
                 "Required GE CT-number ROI geometry and nominal values were not supplied.",
             )
-        slice_index = self._module_slice(self.config.ct_number_offset_mm)
+        slice_index = self._module_slice(
+            self.config.ct_number_offset_mm, module_name="section1"
+        )
         roi_results: dict[str, GECTQAMaterialResult] = {}
         for name, definition in self.config.ct_number_rois.items():
             try:
@@ -1303,7 +1397,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 GECTQANoiseResult,
                 "Required GE noise ROI geometry was not supplied.",
             )
-        slice_index = self._module_slice(self.config.noise_offset_mm)
+        slice_index = self._module_slice(
+            self.config.noise_offset_mm, module_name="uniformity"
+        )
         try:
             roi_result, _ = self._roi_result(
                 "noise",
@@ -1314,16 +1410,27 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             )
         except ValueError as exc:
             return self._unavailable(GECTQANoiseResult, str(exc))
-        passed = (
-            roi_result.std_hu <= self.config.noise_tolerance_hu
-            if self.config.noise_tolerance_hu is not None
-            else None
-        )
+        if self.config.noise_tolerance_hu is None:
+            passed = None
+        elif self.config.noise_reference_hu is None:
+            passed = roi_result.std_hu <= self.config.noise_tolerance_hu
+        else:
+            passed = (
+                abs(roi_result.std_hu - self.config.noise_reference_hu)
+                <= self.config.noise_tolerance_hu
+            )
         return GECTQANoiseResult(
             available=True,
             passed=passed,
             roi=roi_result,
             noise_hu=roi_result.std_hu,
+            reference_hu=self.config.noise_reference_hu,
+            difference_hu=(
+                roi_result.std_hu - self.config.noise_reference_hu
+                if self.config.noise_reference_hu is not None
+                else None
+            ),
+            tolerance_hu=self.config.noise_tolerance_hu,
         )
 
     def _analyze_uniformity(self) -> GECTQAUniformityResult:
@@ -1337,7 +1444,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 GECTQAUniformityResult,
                 f"Uniformity center ROI '{self.config.uniformity_center_name}' was not supplied.",
             )
-        slice_index = self._module_slice(self.config.uniformity_offset_mm)
+        slice_index = self._module_slice(
+            self.config.uniformity_offset_mm, module_name="uniformity"
+        )
         roi_results: dict[str, GECTQAROIResult] = {}
         try:
             for name, definition in self.config.uniformity_rois.items():
@@ -1359,11 +1468,15 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         ]
         max_deviation = max((abs(value - center_value) for value in peripheral), default=0.0)
         max_pairwise = max(means) - min(means)
-        passed = (
-            max_deviation <= self.config.uniformity_tolerance_hu
-            if self.config.uniformity_tolerance_hu is not None
-            else None
-        )
+        if self.config.uniformity_tolerance_hu is None:
+            passed = None
+        elif self.config.uniformity_reference_hu is None:
+            passed = max_deviation <= self.config.uniformity_tolerance_hu
+        else:
+            passed = (
+                abs(max_deviation - self.config.uniformity_reference_hu)
+                <= self.config.uniformity_tolerance_hu
+            )
         return GECTQAUniformityResult(
             available=True,
             passed=passed,
@@ -1371,6 +1484,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             center_roi_name=self.config.uniformity_center_name,
             max_deviation_from_center_hu=max_deviation,
             max_pairwise_difference_hu=max_pairwise,
+            reference_difference_hu=self.config.uniformity_reference_hu,
+            tolerance_hu=self.config.uniformity_tolerance_hu,
         )
 
     def _analyze_high_contrast(self) -> GECTQAHighContrastResult:
@@ -1379,7 +1494,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 GECTQAHighContrastResult,
                 "Required GE high-contrast ROI geometry and line-pair definition were not supplied.",
             )
-        slice_index = self._module_slice(self.config.high_contrast_offset_mm)
+        slice_index = self._module_slice(
+            self.config.high_contrast_offset_mm, module_name="section1"
+        )
         roi_results: dict[str, GECTQAHighContrastROIResult] = {}
         try:
             for name, definition in self.config.high_contrast_rois.items():
@@ -1392,22 +1509,65 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 )
                 threshold = definition.visibility_threshold_hu
                 resolved = base_result.std_hu >= threshold if threshold is not None else None
+                reference_difference = (
+                    base_result.std_hu - definition.reference_std_hu
+                    if definition.reference_std_hu is not None
+                    else None
+                )
+                reference_passed = (
+                    abs(reference_difference) <= definition.tolerance_hu
+                    if reference_difference is not None
+                    and definition.tolerance_hu is not None
+                    else None
+                )
                 roi_results[name] = GECTQAHighContrastROIResult(
                     **base_result.model_dump(),
                     spatial_frequency_lp_mm=definition.spatial_frequency_lp_mm,
                     visibility_score_hu=base_result.std_hu,
                     visibility_threshold_hu=threshold,
                     resolved=resolved,
+                    reference_std_hu=definition.reference_std_hu,
+                    difference_hu=reference_difference,
+                    tolerance_hu=definition.tolerance_hu,
+                    passed=reference_passed,
                 )
         except ValueError as exc:
             return self._unavailable(GECTQAHighContrastResult, str(exc))
         resolved_rois = [result for result in roi_results.values() if result.resolved]
         best = max(resolved_rois, key=lambda result: result.spatial_frequency_lp_mm, default=None)
         resolution = best.spatial_frequency_lp_mm if best is not None else None
-        passed = None
-        if self.config.minimum_resolution_lp_mm is not None:
-            if resolution is not None:
-                passed = resolution >= self.config.minimum_resolution_lp_mm
+        mtf_values: dict[str, float] | None = None
+        mtf_50 = None
+        try:
+            ordered_names = list(self.config.high_contrast_rois)
+            ordered_rois = [
+                self._create_roi(self._image_array(slice_index), self.config.high_contrast_rois[name])
+                for name in ordered_names
+            ]
+            spacings = [
+                self.config.high_contrast_rois[name].spatial_frequency_lp_mm
+                for name in ordered_names
+            ]
+            mtf = MTF.from_high_contrast_diskset(
+                spacings=spacings,
+                diskset=ordered_rois,
+            )
+            mtf_values = {
+                str(percentage): float(mtf.relative_resolution(percentage))
+                for percentage in range(10, 100, 10)
+            }
+            mtf_50 = mtf_values["50"]
+            if resolution is None:
+                resolution = mtf_50
+        except (IndexError, KeyError, ValueError, TypeError):
+            pass
+        passed = (
+            resolution >= self.config.minimum_resolution_lp_mm
+            if resolution is not None and self.config.minimum_resolution_lp_mm is not None
+            else self._combine_known_passes(
+                [result.passed for result in roi_results.values()]
+            )
+        )
         return GECTQAHighContrastResult(
             available=True,
             passed=passed,
@@ -1415,19 +1575,47 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             resolved_group=best.name if best is not None else None,
             resolution_lp_mm=resolution,
             resolution_lp_cm=resolution * 10 if resolution is not None else None,
-            mtf=None,
+            mtf=mtf_values,
         )
 
     def _analyze_low_contrast(self) -> GECTQALowContrastResult:
         definition = self.config.low_contrast
-        if definition is None or not definition.targets:
+        if definition is None:
             return self._unavailable(
                 GECTQALowContrastResult,
                 "Required GE low-contrast target geometry and scoring rule were not supplied.",
             )
-        slice_index = self._module_slice(self.config.low_contrast_offset_mm)
+        slice_index = self._module_slice(
+            self.config.low_contrast_offset_mm, module_name="low_contrast"
+        )
+        grid = self._grid_statistics(slice_index)
+        auto_target_definitions = []
+        if not definition.targets:
+            auto_target_definitions = self._low_contrast_target_definitions(slice_index)
+            if auto_target_definitions:
+                definition = definition.model_copy(
+                    update={"targets": dict(auto_target_definitions)}
+                )
+        if not definition.targets:
+            return GECTQALowContrastResult(
+                available=True,
+                passed=None,
+                reason=(
+                    "Automated grid statistics are available; the GE procedure's "
+                    "visual low-contrast observer score was not inferred."
+                ),
+                cnr_threshold=definition.cnr_threshold,
+                num_rois_detected=0,
+                num_rois_visible=0,
+                grid_cell_size_mm=5.0,
+                grid_num_cells=15,
+                grid_mean_hu=float(grid["mean"]),
+                grid_std_hu=float(grid["std"]),
+                grid_min_hu=float(grid["min"]),
+                grid_max_hu=float(grid["max"]),
+            )
         try:
-            background, _ = self._roi_result(
+            background_result, _ = self._roi_result(
                 "background",
                 definition.background,
                 slice_index,
@@ -1436,15 +1624,18 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             )
             roi_results: dict[str, GECTQALowContrastROIResult] = {}
             for name, target_definition in definition.targets.items():
-                target, _ = self._roi_result(
+                target, target_roi = self._roi_result(
                     name,
                     target_definition,
                     slice_index,
                     self.config.low_contrast_offset_mm,
                     "Low contrast",
                 )
-                contrast = abs(target.mean_hu - background.mean_hu)
-                denominator = np.sqrt((target.std_hu**2 + background.std_hu**2) / 2)
+                background_mean, background_std = self._target_background_statistics(
+                    self._image_array(slice_index), target_roi
+                )
+                contrast = abs(target.mean_hu - background_mean)
+                denominator = np.sqrt((target.std_hu**2 + background_std**2) / 2)
                 cnr = float(contrast / denominator) if denominator > 0 else None
                 visible = cnr >= definition.cnr_threshold if cnr is not None and definition.cnr_threshold is not None else None
                 roi_results[name] = GECTQALowContrastROIResult(
@@ -1452,8 +1643,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     target_size_mm=target_definition.target_size_mm,
                     target_mean_hu=target.mean_hu,
                     target_std_hu=target.std_hu,
-                    background_mean_hu=background.mean_hu,
-                    background_std_hu=background.std_hu,
+                    background_mean_hu=background_mean,
+                    background_std_hu=background_std,
                     contrast_hu=contrast,
                     cnr=cnr,
                     visibility_score=cnr,
@@ -1478,7 +1669,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         return GECTQALowContrastResult(
             available=True,
             passed=passed,
-            background=background,
+            background=background_result,
             rois=roi_results,
             cnr_threshold=definition.cnr_threshold,
             num_rois_detected=len(roi_results),
@@ -1486,6 +1677,18 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             minimum_visible_contrast_hu=min(contrasts) if contrasts else None,
             best_cnr=max(cnrs) if cnrs else None,
             worst_cnr=min(cnrs) if cnrs else None,
+            grid_cell_size_mm=5.0,
+            grid_num_cells=15,
+            grid_mean_hu=float(grid["mean"]),
+            grid_std_hu=float(grid["std"]),
+            grid_min_hu=float(grid["min"]),
+            grid_max_hu=float(grid["max"]),
+            method=(
+                "automatic circular target candidates + CNR estimate; visual "
+                "observer score not inferred"
+                if auto_target_definitions
+                else "configured target/background CNR"
+            ),
         )
 
     def _analyze_slice_thickness(self) -> GECTQASliceThicknessResult:
@@ -1494,11 +1697,13 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             return self._unavailable(
                 GECTQASliceThicknessResult,
                 "Required GE slice-thickness insert geometry and calibration were not supplied.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
             )
         if self.num_images < 3 or self.slice_spacing_mm is None:
             return self._unavailable(
                 GECTQASliceThicknessResult,
                 "At least three CT slices with usable z spacing are required for slice-thickness analysis.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
             )
         values: list[float] = []
         try:
@@ -1512,7 +1717,11 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 )
                 values.append(roi.mean_hu)
         except ValueError as exc:
-            return self._unavailable(GECTQASliceThicknessResult, str(exc))
+            return self._unavailable(
+                GECTQASliceThicknessResult,
+                str(exc),
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
+            )
         profile_z = self.z_positions.copy()
         target_z = profile_z[self.origin_slice] + definition.offset_mm
         if definition.sample_half_range_mm is not None:
@@ -1529,6 +1738,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             return self._unavailable(
                 GECTQASliceThicknessResult,
                 "The configured slice-thickness profile has no measurable peak.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
             )
         half_level = baseline + (peak - baseline) / 2
         above = profile_values >= half_level
@@ -1542,6 +1752,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             return self._unavailable(
                 GECTQASliceThicknessResult,
                 "The slice-thickness FWHM reaches the acquired series boundary.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
             )
         left_position = self._interpolate_crossing(
             profile_z[group_start - 1],
@@ -1576,6 +1787,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             physical_z_mm=selected_peak_z,
             profile_z_mm=[float(value) for value in profile_z],
             profile_values_hu=[float(value) for value in profile_values],
+            acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
         )
 
     @staticmethod
@@ -1609,6 +1821,247 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             tolerance_mm=tolerance,
         )
 
+    def _reference_result(self) -> GECTQAReference:
+        """Build the public reference values included in every result."""
+        water = self.config.ct_number_rois.get("Water")
+        first_high = self.config.high_contrast_rois.get("1.6mm")
+        scanner_model = self._metadata.manufacturer_model_name or "unknown model"
+        if "OPTIMA" in scanner_model.upper():
+            scanner_reference_status = (
+                f"DICOM model is {scanner_model}; GE phantom references are applied, "
+                "with local Optima protocol validation still required."
+            )
+        else:
+            scanner_reference_status = (
+                f"DICOM model is {scanner_model}, not explicitly Optima; GE phantom "
+                "references are applied without inventing model-specific calibration."
+            )
+        return GECTQAReference(
+            source=self.config.reference_source or "local configuration",
+            section1_scan_location_mm=self.config.section1_location_mm,
+            section3_scan_location_mm=self.config.section3_location_mm,
+            water_nominal_hu=water.nominal_hu if water and water.nominal_hu is not None else 0.0,
+            water_tolerance_hu=water.tolerance_hu if water and water.tolerance_hu is not None else 3.0,
+            plexiglass_water_difference_hu=(
+                self.config.contrast_scale.nominal_difference_hu
+                if self.config.contrast_scale
+                and self.config.contrast_scale.nominal_difference_hu is not None
+                else 120.0
+            ),
+            plexiglass_water_tolerance_hu=(
+                self.config.contrast_scale.tolerance_hu
+                if self.config.contrast_scale
+                and self.config.contrast_scale.tolerance_hu is not None
+                else 12.0
+            ),
+            noise_nominal_hu=(
+                self.config.noise_reference_hu
+                if self.config.noise_reference_hu is not None
+                else 3.2
+            ),
+            noise_tolerance_hu=(
+                self.config.noise_tolerance_hu
+                if self.config.noise_tolerance_hu is not None
+                else 0.3
+            ),
+            uniformity_difference_nominal_hu=(
+                self.config.uniformity_reference_hu
+                if self.config.uniformity_reference_hu is not None
+                else 0.0
+            ),
+            uniformity_difference_tolerance_hu=(
+                self.config.uniformity_tolerance_hu
+                if self.config.uniformity_tolerance_hu is not None
+                else 3.0
+            ),
+            high_contrast_1_6mm_std_hu=(
+                first_high.reference_std_hu
+                if first_high and first_high.reference_std_hu is not None
+                else 37.0
+            ),
+            high_contrast_1_6mm_tolerance_hu=(
+                first_high.tolerance_hu
+                if first_high and first_high.tolerance_hu is not None
+                else 4.0
+            ),
+            high_contrast_bar_sizes_mm=GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
+            positioning_tolerance_mm=(
+                self.config.positioning_tolerance_mm
+                if self.config.positioning_tolerance_mm is not None
+                else 2.0
+            ),
+            scanner_reference_status=scanner_reference_status,
+        )
+
+    def _analyze_helios_compatibility(self) -> GECTQAHeliosCompatibilityResult:
+        """Generate Helios-shaped metrics without identifying the phantom as Helios."""
+        if not self.config.use_helios_compatibility:
+            return GECTQAHeliosCompatibilityResult(
+                available=False,
+                reference_source=GE_QA_REFERENCE_SOURCE,
+                validity="disabled by configuration",
+            )
+        section1 = self._module_locations.section1_slice_index
+        uniformity = self._module_locations.uniformity_slice_index
+        low_contrast = self._module_locations.low_contrast_slice_index
+        try:
+            contrast_results = {}
+            for name, setting in GE_HELIOS_CONTRAST_SCALE_ROI_SETTINGS.items():
+                definition = _roi_from_setting(setting)
+                contrast_results[name], _ = self._roi_result(
+                    name,
+                    definition,
+                    section1,
+                    self.config.section1_location_mm,
+                    "Helios contrast scale",
+                )
+            plastic = contrast_results["Plexiglass"]
+            water = contrast_results["Water"]
+            contrast_scale = GECTQAHeliosContrastScaleResult(
+                slice_index=section1,
+                physical_z_mm=float(self.z_positions[section1]),
+                roi_settings=contrast_results,
+                mean_hu_water=water.mean_hu,
+                mean_hu_plastic=plastic.mean_hu,
+                hu_difference=plastic.mean_hu - water.mean_hu,
+                std_dev_water=water.std_hu,
+            )
+        except (IndexError, ValueError, KeyError):
+            contrast_scale = None
+
+        high_results = {}
+        high_settings = GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS
+        high_definitions = self._default_high_contrast_rois()
+        try:
+            for name, definition in high_definitions.items():
+                high_results[name], _ = self._roi_result(
+                    name,
+                    definition,
+                    section1,
+                    self.config.section1_location_mm,
+                    "Helios high contrast",
+                )
+            high_rois = [
+                self._create_roi(self._image_array(section1), high_definitions[name])
+                for name in high_settings
+            ]
+            mtf = MTF.from_high_contrast_diskset(
+                spacings=[1 / (2 * high_settings[name]["bar_size_mm"]) for name in high_settings],
+                diskset=high_rois,
+            )
+            mtf_values = {
+                str(percentage): float(mtf.relative_resolution(percentage))
+                for percentage in range(10, 100, 10)
+            }
+            high_contrast = GECTQAHeliosHighContrastResult(
+                slice_index=section1,
+                physical_z_mm=float(self.z_positions[section1]),
+                rois=high_results,
+                roi_std_hu={name: result.std_hu for name, result in high_results.items()},
+                mtf_lp_mm=mtf_values,
+                mtf_50_lp_mm=mtf_values["50"],
+            )
+        except (IndexError, ValueError, KeyError, TypeError):
+            high_contrast = None
+
+        low_slices = {}
+        low_slice_indices = [
+            max(0, min(self.num_images - 1, low_contrast + offset))
+            for offset in (0, -1, -2)
+        ]
+        try:
+            low_means = []
+            low_stds = []
+            for number, slice_index in enumerate(low_slice_indices, start=1):
+                grid = self._grid_statistics(slice_index)
+                low_means.append(float(grid["mean"]))
+                low_stds.append(float(grid["std"]))
+                low_slices[f"slice_{number}"] = GECTQAHeliosLowContrastSliceResult(
+                    slice_index=slice_index,
+                    physical_z_mm=float(self.z_positions[slice_index]),
+                    offset_from_center_slice_mm=float(
+                        self.z_positions[slice_index] - self.z_positions[low_contrast]
+                    ),
+                    mean=float(grid["mean"]),
+                    std=float(grid["std"]),
+                    min_hu=float(grid["min"]),
+                    max_hu=float(grid["max"]),
+                )
+            low_contrast_result = GECTQAHeliosLowContrastResult(
+                slices=low_slices,
+                mean=float(np.mean(low_means)),
+                std=float(np.mean(low_stds)),
+                cell_size_mm=5.0,
+                num_cells=15,
+            )
+        except (IndexError, ValueError, KeyError):
+            low_contrast_result = None
+
+        noise_uniformity = None
+        try:
+            roi_results = {}
+            for name, setting in GE_HELIOS_UNIFORMITY_ROI_SETTINGS.items():
+                roi_results[name], _ = self._roi_result(
+                    name,
+                    _roi_from_setting(setting),
+                    uniformity,
+                    self.config.section3_location_mm,
+                    "Helios noise uniformity",
+                )
+            noise_definition = GECTQAROI(
+                x_mm=0,
+                y_mm=0,
+                width_mm=25,
+                height_mm=25,
+            )
+            noise_roi, _ = self._roi_result(
+                "Center",
+                noise_definition,
+                uniformity,
+                self.config.section3_location_mm,
+                "Helios noise",
+            )
+            outer_mean = float(
+                np.mean(
+                    [
+                        roi_results["12 o'clock"].mean_hu,
+                        roi_results["3 o'clock"].mean_hu,
+                    ]
+                )
+            )
+            noise_uniformity = GECTQAHeliosNoiseUniformityResult(
+                slice_index=uniformity,
+                physical_z_mm=float(self.z_positions[uniformity]),
+                rois=roi_results,
+                noise_roi=noise_roi,
+                noise_center_std=noise_roi.std_hu,
+                mean_outer=outer_mean,
+                uniformity_difference=roi_results["Center"].mean_hu - outer_mean,
+            )
+        except (IndexError, ValueError, KeyError):
+            noise_uniformity = None
+
+        return GECTQAHeliosCompatibilityResult(
+            available=any(
+                value is not None
+                for value in (
+                    contrast_scale,
+                    high_contrast,
+                    low_contrast_result,
+                    noise_uniformity,
+                )
+            ),
+            reference_source=GE_QA_REFERENCE_SOURCE,
+            validity=(
+                "GE QA phantom measured with Helios-compatible ROI algorithms; "
+                "not a GE Helios phantom result"
+            ),
+            contrast_scale=contrast_scale,
+            high_contrast=high_contrast,
+            low_contrast=low_contrast_result,
+            noise_uniformity=noise_uniformity,
+        )
+
     def analyze(
         self,
         center_override: tuple[float, float] | None = None,
@@ -1630,7 +2083,15 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         """
         self._plot_entries = []
         self._current_localization = self._localize(center_override, angle_override)
+        self._module_locations = self._detect_module_locations()
         self.origin_slice = self._find_origin_slice(origin_slice)
+        if origin_slice is not None:
+            self._module_locations = self._module_locations.model_copy(
+                update={
+                    "section1_slice_index": self.origin_slice,
+                    "section1_physical_z_mm": float(self.z_positions[self.origin_slice]),
+                }
+            )
         ct_number = self._analyze_ct_number()
         contrast_scale = self._analyze_contrast_scale(ct_number)
         noise = self._analyze_noise()
@@ -1639,6 +2100,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         low_contrast = self._analyze_low_contrast()
         slice_thickness = self._analyze_slice_thickness()
         positioning = self._analyze_positioning()
+        self._helios_compatibility = self._analyze_helios_compatibility()
         self._analysis = {
             "ct_number": ct_number,
             "contrast_scale": contrast_scale,
@@ -1674,10 +2136,12 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             overall_passed = None
         return GECTQAResult(
             phantom_model=self.config.phantom_model,
+            reference=self._reference_result(),
             metadata=self._metadata,
             scanner_model=self._metadata.manufacturer_model_name,
             num_images=self.num_images,
             origin_slice=self.origin_slice,
+            module_locations=self._module_locations,
             localization=self._current_localization,
             ct_number=self._analysis["ct_number"],
             contrast_scale=self._analysis["contrast_scale"],
@@ -1688,6 +2152,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             slice_thickness=self._analysis["slice_thickness"],
             positioning=self._analysis["positioning"],
             alignment=self._analysis["alignment"],
+            helios_compatibility=self._helios_compatibility,
             overall_passed=overall_passed,
             num_tests=len(available_tests),
             num_passed=len(passed_tests),
@@ -1698,22 +2163,80 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     def results(self) -> str:
         """Return a concise human-readable report."""
         data = self.results_data()
-        status = "PASS" if data.overall_passed is True else "FAIL" if data.overall_passed is False else "NOT ASSESSED"
+        status = (
+            "PASS"
+            if data.overall_passed is True
+            else "FAIL"
+            if data.overall_passed is False
+            else "NOT ASSESSED"
+        )
+        material_lines = [
+            f"  {name}: {result.mean_hu:.2f} HU (nominal={result.nominal_hu}, passed={result.passed})"
+            for name, result in data.ct_number.rois.items()
+        ]
+        high_lines = [
+            f"  {name}: SD={result.std_hu:.2f} HU (reference={result.reference_std_hu}, passed={result.passed})"
+            for name, result in data.high_contrast_resolution.rois.items()
+        ]
         lines = [
             "GE CT QA Phantom Analysis",
             "-------------------------",
             f"Phantom: {data.phantom_model}",
+            f"Scanner: {data.scanner_model or 'unknown'}",
+            f"Reference applicability: {data.reference.scanner_reference_status}",
             f"Images: {data.num_images}",
+            f"Matrix/pixel spacing: {data.metadata.rows} x {data.metadata.columns} / {data.metadata.pixel_spacing_mm} mm",
+            f"Acquisition: {data.metadata.kvp} kVp, {data.metadata.tube_current_ma} mA, kernel={data.metadata.convolution_kernel}",
             f"Phantom diameter: {data.localization.phantom_diameter_mm:.1f} mm",
             f"Phantom rotation: {data.localization.phantom_rotation_deg:.2f} deg",
-            f"Positioning: ({data.positioning.offset_x_mm:.2f}, {data.positioning.offset_y_mm:.2f}) mm; passed={data.positioning.passed}",
-            f"CT number: {data.ct_number.passed if data.ct_number.available else 'unavailable'}",
-            f"Contrast scale: {data.contrast_scale.contrast_scale if data.contrast_scale.available else 'unavailable'}",
-            f"Noise: {data.noise.noise_hu if data.noise.available else 'unavailable'} HU",
-            f"Uniformity: {data.uniformity.max_deviation_from_center_hu if data.uniformity.available else 'unavailable'} HU max deviation",
-            f"High contrast: {data.high_contrast_resolution.resolution_lp_mm if data.high_contrast_resolution.available else 'unavailable'} lp/mm",
-            f"Low contrast: {data.low_contrast.num_rois_visible}/{data.low_contrast.num_rois_detected} visible" if data.low_contrast.available else "Low contrast: unavailable",
-            f"Slice thickness: {data.slice_thickness.measured_slice_thickness_mm if data.slice_thickness.available else 'unavailable'} mm",
+            f"Module slices: Section 1={data.module_locations.section1_slice_index} (z={data.module_locations.section1_physical_z_mm:.1f}), uniformity={data.module_locations.uniformity_slice_index} (z={data.module_locations.uniformity_physical_z_mm:.1f}), low contrast={data.module_locations.low_contrast_slice_index} (z={data.module_locations.low_contrast_physical_z_mm:.1f})",
+            "",
+            "CT Number Accuracy",
+            *material_lines,
+            f"  Passed: {data.ct_number.passed}",
+            "Contrast Scale",
+            f"  Plexiglass - water: {data.contrast_scale.contrast_scale:.2f} HU (reference={data.reference.plexiglass_water_difference_hu:.1f} +/- {data.reference.plexiglass_water_tolerance_hu:.1f}; passed={data.contrast_scale.passed})"
+            if data.contrast_scale.contrast_scale is not None
+            else "  unavailable",
+            "Noise and Uniformity",
+            f"  Noise: {data.noise.noise_hu:.2f} HU (reference={data.reference.noise_nominal_hu:.1f} +/- {data.reference.noise_tolerance_hu:.1f}; passed={data.noise.passed})"
+            if data.noise.noise_hu is not None
+            else "  unavailable",
+            f"  Uniformity max deviation: {data.uniformity.max_deviation_from_center_hu:.2f} HU (limit={data.reference.uniformity_difference_tolerance_hu:.1f}; passed={data.uniformity.passed})"
+            if data.uniformity.max_deviation_from_center_hu is not None
+            else "  unavailable",
+            "High Contrast Spatial Resolution",
+            *high_lines,
+            f"  Relative MTF 50%: {data.high_contrast_resolution.mtf.get('50'):.3f} lp/mm"
+            if data.high_contrast_resolution.mtf
+            and data.high_contrast_resolution.mtf.get("50") is not None
+            else "  Relative MTF: unavailable",
+            f"  Reference check passed: {data.high_contrast_resolution.passed}",
+            "Low Contrast Detectability",
+            f"  15 x 15 grid: mean={data.low_contrast.grid_mean_hu:.2f} HU, SD={data.low_contrast.grid_std_hu:.2f} HU, range={data.low_contrast.grid_min_hu:.2f} to {data.low_contrast.grid_max_hu:.2f} HU"
+            if data.low_contrast.grid_mean_hu is not None
+            else "  unavailable",
+            "  Visual observer score: not automated",
+            "Slice Thickness",
+            f"  DICOM acquired SliceThickness: {data.slice_thickness.acquired_slice_thickness_mm} mm",
+            f"  Phantom measurement: {data.slice_thickness.measured_slice_thickness_mm if data.slice_thickness.available else 'not available'}",
+            "Positioning and Alignment",
+            f"  Image offset: x={data.positioning.offset_x_mm:.2f} mm, y={data.positioning.offset_y_mm:.2f} mm; passed={data.positioning.passed}",
+            f"  External laser/light-field: {data.alignment.reason}",
+            "Helios-compatible comparison",
+            f"  Relative MTF 50%: {data.helios_compatibility.high_contrast.mtf_50_lp_mm:.3f} lp/mm"
+            if data.helios_compatibility
+            and data.helios_compatibility.high_contrast
+            else "  unavailable",
+            f"  Low-contrast grid mean/SD: {data.helios_compatibility.low_contrast.mean:.2f} / {data.helios_compatibility.low_contrast.std:.2f} HU"
+            if data.helios_compatibility
+            and data.helios_compatibility.low_contrast
+            else "  unavailable",
+            f"  Validity: {data.helios_compatibility.validity}"
+            if data.helios_compatibility
+            else "  unavailable",
+            "",
+            f"Tests: {data.num_passed} passed, {data.num_failed} failed, {data.num_tests} assessed; warnings={data.num_warnings}",
             f"Overall: {status}",
         ]
         return "\n".join(lines)
@@ -1756,27 +2279,67 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         axis.set_title("Series side view")
         axis.set_yticks([])
 
+    def _plot_mtf(self, axis: plt.Axes) -> None:
+        compatibility = self.results_data().helios_compatibility
+        if compatibility is None or compatibility.high_contrast is None:
+            axis.text(0.5, 0.5, "Relative MTF unavailable", ha="center", va="center")
+            axis.set_axis_off()
+            return
+        mtf_values = compatibility.high_contrast.mtf_lp_mm
+        if not mtf_values:
+            axis.text(0.5, 0.5, "Relative MTF unavailable", ha="center", va="center")
+            axis.set_axis_off()
+            return
+        percentages = [int(value) for value in mtf_values]
+        axis.plot(percentages, [mtf_values[str(value)] for value in percentages], marker="o")
+        axis.set_title("Relative MTF")
+        axis.set_xlabel("MTF (%)")
+        axis.set_ylabel("lp/mm")
+        axis.grid(alpha=0.25)
+
     def plot_analyzed_image(self, show: bool = True, **plt_kwargs) -> plt.Figure:
-        """Plot the localized phantom and configured ROIs."""
+        """Plot all automatically detected GE modules and configured ROIs."""
         if not self._analysis_complete:
             raise ValueError("The GE CT QA phantom has not been analyzed yet.")
-        figure, axes = plt.subplots(1, 2, **plt_kwargs)
-        self._plot_axial(axes[0], self.origin_slice)
-        self._plot_side(axes[1])
+        figure, axes = plt.subplots(2, 3, **plt_kwargs)
+        self._plot_axial(axes[0, 0], self.module_locations.section1_slice_index)
+        axes[0, 0].set_title("Section 1: contrast / resolution")
+        self._plot_axial(axes[0, 1], self.module_locations.uniformity_slice_index)
+        axes[0, 1].set_title("Section 3: noise / uniformity")
+        self._plot_axial(axes[0, 2], self.module_locations.low_contrast_slice_index)
+        axes[0, 2].set_title("Section 3: low contrast")
+        self._plot_side(axes[1, 0])
+        self._plot_mtf(axes[1, 1])
+        axes[1, 2].axis("off")
         figure.tight_layout()
         if show:
             plt.show()
         return figure
 
     def plot_images(self, show: bool = True, **plt_kwargs) -> dict[str, plt.Figure]:
-        """Return individual axial and side-view figures."""
+        """Return individual module, side-view, and MTF figures."""
         if not self._analysis_complete:
             raise ValueError("The GE CT QA phantom has not been analyzed yet.")
-        axial, axial_axis = plt.subplots(**plt_kwargs)
-        self._plot_axial(axial_axis, self.origin_slice)
+        section1, section1_axis = plt.subplots(**plt_kwargs)
+        self._plot_axial(section1_axis, self.module_locations.section1_slice_index)
+        section1_axis.set_title("Section 1: contrast / resolution")
+        uniformity, uniformity_axis = plt.subplots(**plt_kwargs)
+        self._plot_axial(uniformity_axis, self.module_locations.uniformity_slice_index)
+        uniformity_axis.set_title("Section 3: noise / uniformity")
+        low_contrast, low_contrast_axis = plt.subplots(**plt_kwargs)
+        self._plot_axial(low_contrast_axis, self.module_locations.low_contrast_slice_index)
+        low_contrast_axis.set_title("Section 3: low contrast")
         side, side_axis = plt.subplots(**plt_kwargs)
         self._plot_side(side_axis)
-        figures = {"localization": axial, "side": side}
+        mtf, mtf_axis = plt.subplots(**plt_kwargs)
+        self._plot_mtf(mtf_axis)
+        figures = {
+            "section1": section1,
+            "uniformity": uniformity,
+            "low_contrast": low_contrast,
+            "side": side,
+            "mtf": mtf,
+        }
         if show:
             plt.show()
         return figures
@@ -1788,27 +2351,43 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         show_legend: bool = True,
         **kwargs,
     ) -> dict[str, go.Figure]:
-        """Return Plotly axial and side-view figures."""
+        """Return Plotly module, side-view, and relative-MTF figures."""
         if not self._analysis_complete:
             raise ValueError("The GE CT QA phantom has not been analyzed yet.")
-        image_array = np.asarray(self.dicom_stack[self.origin_slice].array)
-        axial = go.Figure(
-            go.Heatmap(
-                z=image_array,
-                colorscale="gray",
-                zmin=-1000,
-                zmax=1000,
-                showscale=show_colorbar,
+
+        def axial_figure(slice_index: int, title: str) -> go.Figure:
+            figure = go.Figure(
+                go.Heatmap(
+                    z=np.asarray(self.dicom_stack[slice_index].array),
+                    colorscale="gray",
+                    zmin=-1000,
+                    zmax=1000,
+                    showscale=show_colorbar,
+                )
             )
+            figure.add_trace(
+                go.Scatter(
+                    x=[self._current_localization.phantom_center_x_px],
+                    y=[self._current_localization.phantom_center_y_px],
+                    mode="markers",
+                    name="Phantom center",
+                    marker={"color": "red", "symbol": "cross"},
+                )
+            )
+            figure.update_layout(showlegend=show_legend, title=title)
+            return figure
+
+        section1 = axial_figure(
+            self.module_locations.section1_slice_index,
+            "Section 1: contrast / resolution",
         )
-        axial.add_trace(
-            go.Scatter(
-                x=[self._current_localization.phantom_center_x_px],
-                y=[self._current_localization.phantom_center_y_px],
-                mode="markers",
-                name="Phantom center",
-                marker={"color": "red", "symbol": "cross"},
-            )
+        uniformity = axial_figure(
+            self.module_locations.uniformity_slice_index,
+            "Section 3: noise / uniformity",
+        )
+        low_contrast = axial_figure(
+            self.module_locations.low_contrast_slice_index,
+            "Section 3: low contrast",
         )
         side = go.Figure(
             go.Heatmap(
@@ -1818,9 +2397,25 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 **kwargs,
             )
         )
-        axial.update_layout(showlegend=show_legend, title="GE CT QA localization")
         side.update_layout(showlegend=show_legend, title="GE CT QA side view")
-        figures = {"Localization": axial, "Side View": side}
+        mtf = go.Figure()
+        compatibility = self.results_data().helios_compatibility
+        if compatibility and compatibility.high_contrast and compatibility.high_contrast.mtf_lp_mm:
+            values = compatibility.high_contrast.mtf_lp_mm
+            mtf.add_scatter(
+                x=[int(value) for value in values],
+                y=[values[value] for value in values],
+                mode="lines+markers",
+                name="Relative MTF",
+            )
+        mtf.update_layout(showlegend=show_legend, title="Relative MTF", xaxis_title="MTF (%)", yaxis_title="lp/mm")
+        figures = {
+            "Section 1": section1,
+            "Uniformity": uniformity,
+            "Low Contrast": low_contrast,
+            "Side View": side,
+            "MTF": mtf,
+        }
         if show:
             for figure in figures.values():
                 figure.show()
@@ -1862,7 +2457,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         """Publish a PDF containing structured results and analysis plots."""
         analysis_images = self.save_images(to_stream=True)
         canvas = pdf.PylinacCanvas(
-            filename,
+            str(filename),
             page_title=f"{self._model} Analysis",
             metadata=metadata,
             logo=logo,
