@@ -30,9 +30,61 @@ from .core import pdf
 from .core.geometry import Point
 from .core.image import DicomImageStack
 from .core.io import get_url
+from .core.mtf import MTF
 from .core.roi import DiskROI, RectangleROI
 from .core.utilities import QuaacDatum, QuaacMixin, ResultBase, ResultsDataMixin
 from .core.warnings import capture_warnings
+
+
+GE_QA_REFERENCE_SOURCE = (
+    "GE CT Technical Reference Manual 5800010-1ENr2, Chapter 12, Quality Assurance"
+)
+GE_QA_SECTION_1_LOCATION_MM = 0.0
+GE_QA_SECTION_3_LOCATION_MM = 60.0
+GE_QA_HIGH_CONTRAST_BAR_SIZES_MM = (1.6, 1.3, 1.0, 0.8, 0.6, 0.5)
+
+GE_HELIOS_CONTRAST_SCALE_ROI_SETTINGS = {
+    "Plexiglass": {"width_mm": 10.0, "height_mm": 10.0, "distance_mm": 35.0, "angle_deg": -135.0},
+    "Water": {"width_mm": 10.0, "height_mm": 10.0, "distance_mm": 75.0, "angle_deg": -90.0},
+}
+GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS = {
+    "1.6mm": {"width_mm": 8.0, "distance_mm": 42.0, "angle_deg": -53.0, "bar_size_mm": 1.6},
+    "1.3mm": {"width_mm": 7.0, "distance_mm": 21.0, "angle_deg": -62.0, "bar_size_mm": 1.3},
+    "1.0mm": {"width_mm": 6.0, "distance_mm": 5.0, "angle_deg": -120.0, "bar_size_mm": 1.0},
+    "0.8mm": {"width_mm": 5.0, "distance_mm": 16.0, "angle_deg": 146.0, "bar_size_mm": 0.8},
+}
+GE_HELIOS_UNIFORMITY_ROI_SETTINGS = {
+    "Center": {"width_mm": 15.0, "height_mm": 15.0, "distance_mm": 0.0, "angle_deg": 0.0},
+    "12 o'clock": {"width_mm": 15.0, "height_mm": 15.0, "distance_mm": 75.0, "angle_deg": -90.0},
+    "3 o'clock": {"width_mm": 15.0, "height_mm": 15.0, "distance_mm": 75.0, "angle_deg": 0.0},
+}
+
+
+def _rectangular_roi(
+    settings: dict[str, float],
+    *,
+    nominal_hu: float | None = None,
+    tolerance_hu: float | None = None,
+) -> GECTQAMaterialROI:
+    """Build a physical-mm rectangular material ROI from a Helios setting."""
+    return GECTQAMaterialROI(
+        x_mm=np.cos(np.deg2rad(settings["angle_deg"])) * settings["distance_mm"],
+        y_mm=np.sin(np.deg2rad(settings["angle_deg"])) * settings["distance_mm"],
+        width_mm=settings["width_mm"],
+        height_mm=settings["height_mm"],
+        nominal_hu=nominal_hu,
+        tolerance_hu=tolerance_hu,
+    )
+
+
+def _roi_from_setting(settings: dict[str, float]) -> GECTQAROI:
+    """Build a physical-mm rectangular ROI from a Helios setting."""
+    return GECTQAROI(
+        x_mm=np.cos(np.deg2rad(settings["angle_deg"])) * settings["distance_mm"],
+        y_mm=np.sin(np.deg2rad(settings["angle_deg"])) * settings["distance_mm"],
+        width_mm=settings["width_mm"],
+        height_mm=settings["height_mm"],
+    )
 
 
 class GECTQAROI(BaseModel):
@@ -81,6 +133,8 @@ class GECTQAHighContrastROI(GECTQAROI):
 
     spatial_frequency_lp_mm: float
     visibility_threshold_hu: float | None = None
+    reference_std_hu: float | None = None
+    tolerance_hu: float | None = None
 
 
 class GECTQALowContrastTarget(GECTQAROI):
@@ -141,16 +195,23 @@ class GECTQAConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     phantom_model: str = "GE 20 cm QA Phantom"
+    reference_source: str | None = None
     expected_diameter_range_mm: tuple[float, float] = (200.0, 215.0)
+    section1_location_mm: float = GE_QA_SECTION_1_LOCATION_MM
+    section3_location_mm: float = GE_QA_SECTION_3_LOCATION_MM
+    automatic_module_detection: bool = True
+    use_helios_compatibility: bool = True
     ct_number_offset_mm: float = 0
     ct_number_rois: dict[str, GECTQAMaterialROI] = Field(default_factory=dict)
     contrast_scale: GECTQAContrastScaleConfig | None = None
     noise_offset_mm: float = 0
     noise_roi: GECTQAROI | None = None
+    noise_reference_hu: float | None = None
     noise_tolerance_hu: float | None = None
     uniformity_offset_mm: float = 0
     uniformity_rois: dict[str, GECTQAROI] = Field(default_factory=dict)
     uniformity_center_name: str = "center"
+    uniformity_reference_hu: float | None = None
     uniformity_tolerance_hu: float | None = None
     high_contrast_offset_mm: float = 0
     high_contrast_rois: dict[str, GECTQAHighContrastROI] = Field(default_factory=dict)
@@ -166,6 +227,58 @@ class GECTQAConfig(BaseModel):
         if low <= 0 or high <= low:
             raise ValueError("expected_diameter_range_mm must be an increasing range")
         return self
+
+    @classmethod
+    def from_ge_manual(cls) -> GECTQAConfig:
+        """Return defaults from the GE QA manual and Helios-compatible geometry.
+
+        The ROI dimensions and reference values are taken from the supplied
+        GE technical reference manual.  Section slices are still detected
+        from image content because ``S0`` and ``S60`` are scan-location labels,
+        not reliable DICOM z offsets across acquisitions.
+        """
+        contrast_rois = GE_HELIOS_CONTRAST_SCALE_ROI_SETTINGS
+        high_contrast_rois = {
+            name: GECTQAHighContrastROI(
+                **_roi_from_setting(setting).model_dump(),
+                spatial_frequency_lp_mm=1 / (2 * setting["bar_size_mm"]),
+                reference_std_hu=37.0 if name == "1.6mm" else None,
+                tolerance_hu=4.0 if name == "1.6mm" else None,
+            )
+            for name, setting in GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS.items()
+        }
+        return cls(
+            reference_source=GE_QA_REFERENCE_SOURCE,
+            ct_number_rois={
+                "Plexiglass": _rectangular_roi(contrast_rois["Plexiglass"]),
+                "Water": _rectangular_roi(
+                    contrast_rois["Water"], nominal_hu=0.0, tolerance_hu=3.0
+                ),
+            },
+            contrast_scale=GECTQAContrastScaleConfig(
+                first_roi="Plexiglass",
+                second_roi="Water",
+                nominal_difference_hu=120.0,
+                tolerance_hu=12.0,
+                units="HU difference",
+            ),
+            noise_roi=GECTQAROI(x_mm=0, y_mm=0, width_mm=25, height_mm=25),
+            noise_reference_hu=3.2,
+            noise_tolerance_hu=0.3,
+            uniformity_rois={
+                name: _roi_from_setting(setting)
+                for name, setting in GE_HELIOS_UNIFORMITY_ROI_SETTINGS.items()
+            },
+            uniformity_center_name="Center",
+            uniformity_reference_hu=0.0,
+            uniformity_tolerance_hu=3.0,
+            high_contrast_rois=high_contrast_rois,
+            low_contrast=GECTQALowContrastConfig(
+                background=GECTQAROI(x_mm=0, y_mm=0, width_mm=5, height_mm=5),
+                targets={},
+            ),
+            positioning_tolerance_mm=2.0,
+        )
 
 
 class GECTQAROIResult(BaseModel):
@@ -233,6 +346,10 @@ class GECTQANoiseResult(GECTQATestResult):
 
     roi: GECTQAROIResult | None = None
     noise_hu: float | None = None
+    reference_hu: float | None = None
+    difference_hu: float | None = None
+    tolerance_hu: float | None = None
+    method: str = "ROI standard deviation"
 
 
 class GECTQAUniformityResult(GECTQATestResult):
@@ -244,6 +361,9 @@ class GECTQAUniformityResult(GECTQATestResult):
     max_pairwise_difference_hu: float | None = None
     uniformity_index: float | None = None
     integral_uniformity: float | None = None
+    reference_difference_hu: float | None = None
+    tolerance_hu: float | None = None
+    method: str = "center-to-periphery mean difference"
 
 
 class GECTQAHighContrastROIResult(GECTQAROIResult):
@@ -253,6 +373,10 @@ class GECTQAHighContrastROIResult(GECTQAROIResult):
     visibility_score_hu: float
     visibility_threshold_hu: float | None
     resolved: bool | None
+    reference_std_hu: float | None = None
+    difference_hu: float | None = None
+    tolerance_hu: float | None = None
+    passed: bool | None = None
 
 
 class GECTQAHighContrastResult(GECTQATestResult):
@@ -263,6 +387,7 @@ class GECTQAHighContrastResult(GECTQATestResult):
     resolution_lp_mm: float | None = None
     resolution_lp_cm: float | None = None
     mtf: dict[str, float] | None = None
+    method: str = "Helios-compatible ROI standard deviation and relative MTF"
 
 
 class GECTQALowContrastROIResult(GECTQAROIResult):
@@ -290,6 +415,13 @@ class GECTQALowContrastResult(GECTQATestResult):
     minimum_visible_contrast_hu: float | None = None
     best_cnr: float | None = None
     worst_cnr: float | None = None
+    method: str = "GE 15 x 15 cell grid statistics"
+    grid_cell_size_mm: float | None = None
+    grid_num_cells: int | None = None
+    grid_mean_hu: float | None = None
+    grid_std_hu: float | None = None
+    grid_min_hu: float | None = None
+    grid_max_hu: float | None = None
 
 
 class GECTQASliceThicknessResult(GECTQATestResult):
@@ -305,6 +437,7 @@ class GECTQASliceThicknessResult(GECTQATestResult):
     physical_z_mm: float | None = None
     profile_z_mm: list[float] = Field(default_factory=list)
     profile_values_hu: list[float] = Field(default_factory=list)
+    acquired_slice_thickness_mm: float | None = None
 
 
 class GECTQAPositioningResult(GECTQATestResult):
@@ -333,6 +466,113 @@ class GECTQALocalizationResult(BaseModel):
     phantom_diameter_mm: float
     phantom_rotation_deg: float
     localization_confidence: float
+
+
+class GECTQAModuleLocations(BaseModel):
+    """Detected GE test-module slices and their image-content scores."""
+
+    section1_scan_location_mm: float
+    section3_scan_location_mm: float
+    section1_slice_index: int
+    section1_physical_z_mm: float
+    section1_score: float
+    uniformity_slice_index: int
+    uniformity_physical_z_mm: float
+    uniformity_score: float
+    low_contrast_slice_index: int
+    low_contrast_physical_z_mm: float
+    low_contrast_score: float
+    detection_method: str
+
+
+class GECTQAReference(BaseModel):
+    """Public reference values used by the automatic GE default profile."""
+
+    source: str
+    section1_scan_location_mm: float
+    section3_scan_location_mm: float
+    water_nominal_hu: float
+    water_tolerance_hu: float
+    plexiglass_water_difference_hu: float
+    plexiglass_water_tolerance_hu: float
+    noise_nominal_hu: float
+    noise_tolerance_hu: float
+    uniformity_difference_nominal_hu: float
+    uniformity_difference_tolerance_hu: float
+    high_contrast_1_6mm_std_hu: float
+    high_contrast_1_6mm_tolerance_hu: float
+    high_contrast_bar_sizes_mm: tuple[float, ...]
+    positioning_tolerance_mm: float
+    clinical_status: str = "public reference; local clinical validation required"
+
+
+class GECTQAHeliosContrastScaleResult(BaseModel):
+    """Helios-compatible contrast-scale values measured on GE Section 1."""
+
+    slice_index: int
+    physical_z_mm: float
+    roi_settings: dict[str, GECTQAROIResult]
+    mean_hu_water: float
+    mean_hu_plastic: float
+    hu_difference: float
+    std_dev_water: float
+
+
+class GECTQAHeliosHighContrastResult(BaseModel):
+    """Helios-compatible high-contrast ROI and relative-MTF values."""
+
+    slice_index: int
+    physical_z_mm: float
+    rois: dict[str, GECTQAROIResult]
+    roi_std_hu: dict[str, float]
+    mtf_lp_mm: dict[str, float] | None
+    mtf_50_lp_mm: float | None
+
+
+class GECTQAHeliosLowContrastSliceResult(BaseModel):
+    """One Helios-compatible 15 x 15 low-contrast grid slice."""
+
+    slice_index: int
+    physical_z_mm: float
+    offset_from_center_slice_mm: float
+    mean: float
+    std: float
+    min_hu: float
+    max_hu: float
+
+
+class GECTQAHeliosLowContrastResult(BaseModel):
+    """Helios-compatible low-contrast grid summary across three slices."""
+
+    slices: dict[str, GECTQAHeliosLowContrastSliceResult]
+    mean: float
+    std: float
+    cell_size_mm: float
+    num_cells: int
+
+
+class GECTQAHeliosNoiseUniformityResult(BaseModel):
+    """Helios-compatible noise and uniformity values on GE Section 3."""
+
+    slice_index: int
+    physical_z_mm: float
+    rois: dict[str, GECTQAROIResult]
+    noise_roi: GECTQAROIResult
+    noise_center_std: float
+    mean_outer: float
+    uniformity_difference: float
+
+
+class GECTQAHeliosCompatibilityResult(BaseModel):
+    """Helios-shaped values retained without claiming Helios phantom identity."""
+
+    available: bool
+    reference_source: str
+    validity: str
+    contrast_scale: GECTQAHeliosContrastScaleResult | None = None
+    high_contrast: GECTQAHeliosHighContrastResult | None = None
+    low_contrast: GECTQAHeliosLowContrastResult | None = None
+    noise_uniformity: GECTQAHeliosNoiseUniformityResult | None = None
 
 
 class GECTQAMetadata(BaseModel):
@@ -365,10 +605,12 @@ class GECTQAResult(ResultBase):
     """Structured results for the GE 20 cm CT QA phantom."""
 
     phantom_model: str
+    reference: GECTQAReference
     metadata: GECTQAMetadata
     scanner_model: str | None
     num_images: int
     origin_slice: int
+    module_locations: GECTQAModuleLocations
     localization: GECTQALocalizationResult
     ct_number: GECTQACTNumberResult
     contrast_scale: GECTQAContrastScaleResult
@@ -379,6 +621,7 @@ class GECTQAResult(ResultBase):
     slice_thickness: GECTQASliceThicknessResult
     positioning: GECTQAPositioningResult
     alignment: GECTQAAlignmentResult
+    helios_compatibility: GECTQAHeliosCompatibilityResult | None
     overall_passed: bool | None
     num_tests: int
     num_passed: int
@@ -416,12 +659,17 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         is_zip: bool = False,
     ) -> None:
         super().__init__()
-        self.config = GECTQAConfig.model_validate(config or {})
+        self.config = (
+            GECTQAConfig.from_ge_manual()
+            if config is None
+            else GECTQAConfig.model_validate(config)
+        )
         self.dicom_stack = self._load_stack(folderpath, is_zip=is_zip)
         self._validate_stack()
         self._metadata = self._build_metadata()
         self._analysis_complete = False
         self._plot_entries: list[tuple[int, object, str]] = []
+        self._module_locations: GECTQAModuleLocations | None = None
 
     @classmethod
     def from_zip(
@@ -700,16 +948,165 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             localization_confidence=confidence,
         )
 
+    def _image_array(self, slice_index: int) -> np.ndarray:
+        """Return one stack image as a floating-point HU array."""
+        return np.asarray(self.dicom_stack[slice_index].array, dtype=float)
+
+    def _default_high_contrast_rois(self) -> dict[str, GECTQAHighContrastROI]:
+        """Return the four Helios-compatible bar ROIs used for detection."""
+        return {
+            name: GECTQAHighContrastROI(
+                **_roi_from_setting(setting).model_dump(),
+                spatial_frequency_lp_mm=1 / (2 * setting["bar_size_mm"]),
+            )
+            for name, setting in GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS.items()
+        }
+
+    def _grid_statistics(
+        self,
+        slice_index: int,
+        cell_size_mm: float = 5.0,
+        num_cells: int = 15,
+    ) -> dict[str, float | list[float]]:
+        """Measure a centered physical-mm grid used by GE and Helios QA."""
+        array = self._image_array(slice_index)
+        cell_width_px = cell_size_mm / self.pixel_spacing[1]
+        cell_height_px = cell_size_mm / self.pixel_spacing[0]
+        total_width_px = num_cells * cell_width_px
+        total_height_px = num_cells * cell_height_px
+        first_x = (
+            self._current_localization.phantom_center_x_px
+            - total_width_px / 2
+            + cell_width_px / 2
+        )
+        first_y = (
+            self._current_localization.phantom_center_y_px
+            - total_height_px / 2
+            + cell_height_px / 2
+        )
+        means: list[float] = []
+        for row in range(num_cells):
+            for column in range(num_cells):
+                roi = RectangleROI(
+                    array=array,
+                    width=cell_width_px,
+                    height=cell_height_px,
+                    center=Point(
+                        first_x + column * cell_width_px,
+                        first_y + row * cell_height_px,
+                    ),
+                )
+                means.append(roi.mean)
+        values = np.asarray(means, dtype=float)
+        return {
+            "means": means,
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values)),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+            "high_cell_count": float(
+                np.sum(values > np.median(values) + 15)
+            ),
+        }
+
+    def _detect_module_locations(self) -> GECTQAModuleLocations:
+        """Detect the image slices that best represent the GE QA modules."""
+        candidate_indices = self._localization_slice_indices or list(
+            range(self.num_images)
+        )
+        high_definitions = self.config.high_contrast_rois or self._default_high_contrast_rois()
+        first_definition = high_definitions.get("1.6mm") or next(
+            iter(high_definitions.values())
+        )
+        section1_scores: dict[int, float] = {}
+        center_scores: dict[int, float] = {}
+        low_scores: dict[int, float] = {}
+        grid_cache: dict[int, dict[str, float | list[float]]] = {}
+        for slice_index in candidate_indices:
+            try:
+                array = self._image_array(slice_index)
+                first_roi = self._create_roi(array, first_definition)
+                section1_scores[slice_index] = float(np.std(self._roi_pixels(first_roi)))
+                center_definition = GECTQAROI(
+                    x_mm=0,
+                    y_mm=0,
+                    width_mm=15,
+                    height_mm=15,
+                )
+                center_roi = self._create_roi(array, center_definition)
+                center_values = self._roi_pixels(center_roi)
+                grid = self._grid_statistics(slice_index)
+                grid_cache[slice_index] = grid
+                center_mean = float(np.mean(center_values))
+                center_scores[slice_index] = float(
+                    abs(center_mean - np.median(center_values))
+                    + np.std(center_values)
+                )
+                if -20 <= float(grid["mean"]) <= 180:
+                    low_scores[slice_index] = float(grid["high_cell_count"])
+                else:
+                    low_scores[slice_index] = -1.0
+            except (IndexError, ValueError):
+                section1_scores[slice_index] = -np.inf
+                center_scores[slice_index] = np.inf
+                low_scores[slice_index] = -np.inf
+
+        section1_slice = max(section1_scores, key=section1_scores.get)
+        uniformity_candidates = [
+            index
+            for index in candidate_indices
+            if abs(index - section1_slice) > 5
+        ] or candidate_indices
+        uniformity_slice = min(
+            uniformity_candidates,
+            key=lambda index: center_scores.get(index, np.inf),
+        )
+        low_contrast_candidates = [
+            index
+            for index in candidate_indices
+            if index != section1_slice and abs(index - section1_slice) > 3
+        ] or candidate_indices
+        low_contrast_slice = max(
+            low_contrast_candidates,
+            key=lambda index: low_scores.get(index, -np.inf),
+        )
+        return GECTQAModuleLocations(
+            section1_scan_location_mm=self.config.section1_location_mm,
+            section3_scan_location_mm=self.config.section3_location_mm,
+            section1_slice_index=int(section1_slice),
+            section1_physical_z_mm=float(self.z_positions[section1_slice]),
+            section1_score=float(section1_scores[section1_slice]),
+            uniformity_slice_index=int(uniformity_slice),
+            uniformity_physical_z_mm=float(self.z_positions[uniformity_slice]),
+            uniformity_score=float(center_scores[uniformity_slice]),
+            low_contrast_slice_index=int(low_contrast_slice),
+            low_contrast_physical_z_mm=float(self.z_positions[low_contrast_slice]),
+            low_contrast_score=float(low_scores[low_contrast_slice]),
+            detection_method=(
+                "content signatures: 1.6 mm bar-pattern standard deviation, "
+                "uniform-water center ROI, and low-contrast grid high-cell count"
+            ),
+        )
+
     def _find_origin_slice(self, requested: int | None) -> int:
         if requested is not None:
             if not 0 <= requested < self.num_images:
                 raise ValueError("origin_slice is outside the loaded CT series.")
             return int(requested)
+        if self._module_locations is not None:
+            return self._module_locations.section1_slice_index
         if self.num_images == 1:
             return 0
         return self._localization_slice_indices[len(self._localization_slice_indices) // 2]
 
-    def _module_slice(self, offset_mm: float) -> int | None:
+    def _module_slice(self, offset_mm: float, module_name: str | None = None) -> int | None:
+        if (
+            self.config.automatic_module_detection
+            and self._module_locations is not None
+            and abs(offset_mm) < 1e-6
+            and module_name is not None
+        ):
+            return int(getattr(self._module_locations, f"{module_name}_slice_index"))
         target_z = self.z_positions[self.origin_slice] + offset_mm
         index = int(np.argmin(np.abs(self.z_positions - target_z)))
         distance = abs(float(self.z_positions[index] - target_z))
