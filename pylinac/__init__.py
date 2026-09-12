@@ -21,6 +21,7 @@ from .field_analysis import (
     Protocol,
 )
 from .field_profile_analysis import FieldProfileAnalysis
+from .ge_ct_qa import GECTQA
 from .helios import GEHeliosCTDaily
 from .log_analyzer import Dynalog, MachineLogs, TrajectoryLog, load_log
 from .picketfence import PicketFence  # must be after log analyzer
