@@ -14,19 +14,24 @@ pattern as the GE Helios and CatPhan analyzers.
 
 .. warning::
 
-    This is a research and development implementation.  The repository does
-    not contain the GE phantom manual or a validated QA worksheet defining the
-    insert map, nominal material values, scoring methods, or action limits.
-    The analyzer therefore requires those values through
-    :class:`~pylinac.ge_ct_qa.GECTQAConfig` and does not substitute CatPhan or
-    Helios geometry.
+    This is a research and development implementation.  The default profile
+    is based on the supplied GE CT Technical Reference Manual
+    ``5800010-1ENr2``, Chapter 12.  Local physicist validation is still
+    required before clinical use, especially for visual low-contrast scoring,
+    slice-thickness hole counting, and local action limits.
 
-The supplied ``CT.TPSQA2017`` series was used to validate the DICOM loading
-and localization path.  It contains 104 CT slices with 0.976562 mm pixels and
-2.5 mm slice thickness.  The automatic circular-body estimate is approximately
-214 mm in diameter.  Those observations are validation facts for that scan,
-not acceptance criteria for the phantom.
+The supplied ``CT.TPSQA2017`` series was used to validate the complete default
+path.  It contains 104 CT slices with 0.976562 mm pixels, 2.5 mm slice
+thickness, and a ``LightSpeed16`` scanner model.  The automatic circular-body
+estimate is approximately 214 mm in diameter.  In stack order, this scan
+places the detected Section 1 bar-pattern slice at index 36, the uniform-water
+slice at index 42, and the low-contrast target slice at index 25.  These are
+scan observations, not fixed indices for other acquisitions.
 
+The supplied DICOM identifies the scanner as ``LightSpeed16`` rather than
+``Optima``.  The analyzer reports that applicability explicitly and applies
+the GE phantom procedure reference values without inventing Optima-specific
+calibration constants.
 Typical Use
 -----------
 
@@ -39,7 +44,7 @@ archive follows the same convention as other pylinac CT analyzers.
     from pylinac import GECTQA
 
     qa = GECTQA(r"C:/CT/GE_Set_1")
-    qa.analyze(angle_override=0)
+    qa.analyze()
 
     print(qa.results())
     result = qa.results_data()
@@ -59,10 +64,17 @@ ZIP input is supported with:
 Configuration
 -------------
 
-The default configuration contains no GE insert locations or clinical
-tolerances.  Define the geometry from the manufacturer documentation or a
-locally validated worksheet.  ROI coordinates are phantom-relative physical
-millimetres, not hard-coded pixels.
+The no-argument constructor uses ``GECTQAConfig.from_ge_manual()``.  It
+includes the GE manual references for water, Plexiglass-to-water contrast,
+noise, uniformity, the 1.6 mm bar standard-deviation check, the documented bar
+sizes, and the 2 mm positioning reference.  It also includes the existing
+Helios-compatible ROI dimensions.  Section 1 and Section 3 are detected from
+image content; the manual's ``S0`` and ``S60`` labels are retained as
+scan-location metadata rather than treated as universal DICOM z offsets.
+
+For a local phantom revision or validated worksheet, pass an explicit
+configuration.  ROI coordinates remain phantom-relative physical millimetres,
+not hard-coded pixels.
 
 .. code-block:: python
 
@@ -70,6 +82,7 @@ millimetres, not hard-coded pixels.
     from pylinac.ge_ct_qa import GECTQAConfig, GECTQAMaterialROI, GECTQAROI
 
     config = GECTQAConfig(
+        automatic_module_detection=False,
         ct_number_offset_mm=0,
         ct_number_rois={
             "water": GECTQAMaterialROI(
@@ -87,9 +100,8 @@ millimetres, not hard-coded pixels.
     qa = GECTQA(r"C:/CT/ge_set_1", config=config)
     qa.analyze(angle_override=0)
 
-The coordinates and values in this example are API examples only.  They are
-not a GE phantom definition and must not be used for clinical testing without
-validation.
+The coordinates and values in this custom example are API examples only.  They
+are not a replacement for a validated local worksheet.
 
 Inputs and validation
 ---------------------
@@ -125,38 +137,48 @@ provide ``angle_override`` when the GE worksheet or a validated orientation
 marker defines the angle.  If automatic localization is unsuitable, pass
 ``center_override=(x_px, y_px)``.
 
-The automatic module anchor is the midpoint of the slices in which the
-phantom body was detected.  It is only a coordinate reference.  Pass
-``origin_slice`` when the GE procedure identifies a specific reference slice.
+The automatic module anchors use image-content signatures: the 1.6 mm bar
+standard deviation for Section 1, a low-deviation water grid for
+noise/uniformity, and compact circular targets plus the 15 x 15 grid for low
+contrast.  Pass ``origin_slice`` when the GE procedure identifies a specific
+reference slice.  The detected physical z positions are retained in
+``module_locations``.
 
 Available measurements
 ----------------------
 
-Configured tests return measured values even when no acceptance limit is
-configured.  In that case ``passed`` is ``None`` rather than an invented
-pass.  The current measurement paths are:
+The default profile returns measured values immediately.  A configured test
+still returns ``passed=None`` when its acceptance rule is not defined.  The
+current measurement paths are:
 
 * **CT number:** mean, median, standard deviation, extrema, percentiles, HU
   difference, and optional tolerance for each configured material ROI.
-* **Contrast scale:** a configured difference between two CT-number ROIs,
-  retaining both underlying values and the optional nominal difference.
-* **Noise:** standard deviation from a configured uniform ROI.
-* **Uniformity:** per-ROI statistics, maximum deviation from the configured
-  center ROI, and maximum pairwise difference.  No undocumented HU uniformity
-  index is synthesized.
-* **High contrast:** configured line-pair sample regions and their standard
-  deviation as a visibility score.  A resolved frequency is reported only
-  when a visibility threshold and validated spatial frequency are configured.
-  MTF is not claimed automatically and remains ``None``.
-* **Low contrast:** configured target/background mean, standard deviation,
-  contrast, CNR, visibility, and visible-target count.  This is a quantitative
-  CNR estimate and is not represented as equivalent to a visual-observer
-  score.
+* **Contrast scale:** Plexiglass minus water using the GE reference
+  ``120 +/- 12 HU`` and the underlying ROI statistics.
+* **Noise:** standard deviation from the 25 mm central box ROI, compared with
+  the GE reference ``3.2 +/- 0.3 HU``.  The supplied scan's measured noise is
+  reported; it is not replaced with the reference value.
+* **Uniformity:** 15 mm center, 12 o'clock, and 3 o'clock ROIs at the detected
+  uniform-water slice, with the GE ``0 +/- 3 HU`` center-to-periphery
+  reference.
+* **High contrast:** Helios-compatible bar ROIs, the GE ``1.6 mm`` standard
+  deviation check (``37 +/- 4 HU``), and relative MTF values at 10% through
+  90%.  The MTF is explicitly labeled relative/Helios-compatible.
+* **Low contrast:** a 15 x 15 grid using 5 mm cells, with mean, standard
+  deviation, extrema, and per-target CNR when target ROIs are configured.  The
+  GE visual observer score is not fabricated from grid statistics.
 * **Slice thickness:** a configured axial profile measured by FWHM, with an
   explicit calibration factor.  At least three slices are required, and the
   DICOM ``SliceThickness`` tag is never reported as a phantom measurement.
 * **Positioning:** image-relative x/y phantom offset and localized rotation.
   This is not external laser alignment.
+
+The result also contains ``helios_compatibility``.  It retains the output
+shape useful for comparing a GE scan with the existing Helios analyzer:
+contrast-scale ROI values, four Helios bar ROI statistics, relative MTF,
+three-slice 15 x 15 low-contrast grid statistics, and noise/uniformity ROI
+values.  It is explicitly marked as a GE phantom measured with
+Helios-compatible algorithms, not as a GE Helios phantom result.
 
 External laser and light-field alignment
 -----------------------------------------
@@ -170,8 +192,10 @@ Results and exports
 -------------------
 
 The typed result is :class:`~pylinac.ge_ct_qa.GECTQAResult`.  It contains
-metadata, localization, all module result objects, availability/reason text,
-pass/fail values, warning count, and an overall state.  The overall state is:
+metadata, public reference values, localization, detected module locations,
+all module result objects, the Helios-compatible comparison block,
+availability/reason text, pass/fail values, warning count, and an overall
+state.  The overall state is:
 
 * ``False`` when an available configured test fails;
 * ``True`` when every available configured test passes;
@@ -180,9 +204,9 @@ pass/fail values, warning count, and an overall state.  The overall state is:
 
 Use ``results_data(as_dict=True)`` or ``results_data(as_json=True)`` for
 external QA applications and trending.  ``plot_analyzed_image`` and
-``plotly_analyzed_images`` show the localized body, center, configured ROIs,
-and series side view.  ``publish_pdf`` includes the human-readable summary
-and analysis images.
+``plotly_analyzed_images`` show Section 1, noise/uniformity, low contrast,
+the series side view, and relative MTF.  ``publish_pdf`` includes the expanded
+human-readable summary and module images.
 
 Validation status and required clinical data
 ---------------------------------------------
@@ -192,27 +216,27 @@ Implemented and tested:
 * single DICOM, directory, and ZIP loading;
 * CT metadata validation, sorting, duplicate/mixed-series rejection, and
   rescaled HU pixels;
-* circular localization, center/diameter reporting, and center overrides;
+* circular localization, center/diameter reporting, module-slice detection,
+  and center overrides;
 * physical-mm ROI conversion;
 * typed results, dict/JSON serialization, plots, and PDF generation;
-* configured CT-number, noise, uniformity, high-contrast ROI, low-contrast
-  CNR, positioning, and profile FWHM code paths.
+* GE manual-default CT-number, contrast-scale, noise, uniformity,
+  high-contrast/relative-MTF, low-contrast-grid, positioning, and explicit
+  acquired-versus-measured slice-thickness reporting;
+* Helios-compatible comparison output and expanded Matplotlib/Plotly/PDF
+  module figures.
 
 Needs clinical validation before use:
 
-* the exact GE insert/module layout and z offsets;
-* material names and nominal HU values;
-* the official contrast-scale equation;
-* high-contrast pattern frequencies and scoring method;
 * low-contrast target sizes and observer/CNR rule;
 * slice-thickness ramp geometry and calibration factor;
-* action limits and required-test policy;
+* local action limits and required-test policy;
 * passing and failing reference scans.
 
-The supplied CT set is not sufficient by itself to establish those clinical
-definitions.  The GE phantom manual or QA worksheet, phantom revision,
-validated local measurements, and a dedicated laser/light-field acquisition
-are required for the remaining claims.
+The supplied CT set and GE manual establish the defaults documented above but
+do not establish local clinical acceptance.  A phantom revision check,
+validated local measurements, passing and failing reference scans, and a
+dedicated laser/light-field acquisition are required for the remaining claims.
 
 API Documentation
 -----------------
@@ -222,6 +246,10 @@ API Documentation
     :members:
 
 .. autopydantic_model:: pylinac.ge_ct_qa.GECTQAResult
+
+.. autopydantic_model:: pylinac.ge_ct_qa.GECTQAReference
+
+.. autopydantic_model:: pylinac.ge_ct_qa.GECTQAModuleLocations
 
 .. autopydantic_model:: pylinac.ge_ct_qa.GECTQAConfig
 
