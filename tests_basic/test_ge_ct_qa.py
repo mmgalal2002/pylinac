@@ -18,6 +18,7 @@ from pylinac.ge_ct_qa import (
     GECTQAROI,
     GECTQAConfig,
     GECTQAMaterialROI,
+    GECTQAReferenceParameter,
     GECTQASliceThicknessConfig,
 )
 
@@ -203,7 +204,27 @@ class TestGECTQA(TestCase):
         qa.analyze(angle_override=0)
         result = qa.results_data().alignment
         self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertFalse(result.applicable)
+        self.assertEqual(qa.results_data().num_tests, 8)
         self.assertIn("dedicated alignment acquisition", result.reason)
+
+    def test_scalar_override_inherits_profile_geometry(self) -> None:
+        qa = GECTQA(self.folder, config=GECTQAConfig(positioning_tolerance_mm=5))
+        self.assertTrue(qa.config.high_contrast_rois)
+        self.assertEqual(qa.config.positioning_tolerance_mm, 5)
+
+    def test_explicit_null_reference_does_not_fall_back(self) -> None:
+        config = GECTQAConfig(
+            reference_parameters={
+                "noise_nominal_hu": GECTQAReferenceParameter(value=None),
+            }
+        )
+        qa = GECTQA(self.folder, config=config)
+        qa.analyze(angle_override=0)
+        data = qa.results_data()
+        self.assertIsNone(data.noise.reference_hu)
+        self.assertEqual(data.noise.status, "NOT_EVALUATED")
+        self.assertIsNone(data.reference.noise_nominal_hu)
 
     def test_mtf_extrapolation_is_classified(self) -> None:
         class FakeMTF:
@@ -217,12 +238,13 @@ class TestGECTQA(TestCase):
             "pylinac.ge_ct_qa.MTF.from_high_contrast_diskset",
             return_value=FakeMTF(),
         ):
-            qa = GECTQA(self.folder)
+            qa = GECTQA(self.folder, config=GECTQAConfig(minimum_resolution_lp_mm=0.1))
             qa.analyze(angle_override=0)
         result = qa.results_data().high_contrast_resolution.mtf_results
         self.assertEqual(result["90"].status, "EXTRAPOLATED")
         self.assertFalse(result["90"].measured_directly)
         self.assertTrue(result["90"].extrapolated)
+        self.assertIsNone(qa.results_data().high_contrast_resolution.passed)
 
     def test_positioning_borderline_failure_reports_excess(self) -> None:
         config = GECTQAConfig(positioning_tolerance_mm=2.0)
@@ -232,6 +254,23 @@ class TestGECTQA(TestCase):
         self.assertEqual(result.status, "FAIL")
         self.assertAlmostEqual(result.excess_mm, 0.057, places=3)
         self.assertIsNotNone(result.confidence)
+
+    def test_slice_thickness_empty_sampling_window_is_unavailable(self) -> None:
+        config = GECTQAConfig(
+            slice_thickness=GECTQASliceThicknessConfig(
+                roi=GECTQAROI(x_mm=0, y_mm=0, radius_mm=5),
+                nominal_mm=2.5,
+                tolerance_mm=0.5,
+                sample_half_range_mm=0.1,
+                insert_geometry={"validated": True},
+                profile_calibration={"validated": True},
+            )
+        )
+        qa = GECTQA(self.folder, config=config)
+        qa.analyze(angle_override=0)
+        result = qa.results_data().slice_thickness
+        self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertIn("fewer than three", result.reason)
 
     def test_user_override_wins_and_is_traceable(self) -> None:
         config = GECTQAConfig.from_profile(
@@ -250,6 +289,7 @@ class TestGECTQA(TestCase):
         single = GECTQA(self.folder / "slice_1.dcm")
         single.analyze(angle_override=0)
         self.assertEqual(single.results_data().num_images, 1)
+        self.assertIsNone(single.results_data().helios_compatibility.low_contrast)
 
         archive = self.folder / "series.zip"
         with zipfile.ZipFile(archive, "w") as zip_file:
