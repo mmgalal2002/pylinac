@@ -498,8 +498,14 @@ class GECTQAConfig(BaseModel):
             uniformity_peripheral_roi_size_mm=(15.0, 15.0),
             uniformity_peripheral_offsets_mm={
                 name: (
-                    float(np.cos(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
-                    float(np.sin(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
+                    float(
+                        np.cos(np.deg2rad(setting["angle_deg"]))
+                        * setting["distance_mm"]
+                    ),
+                    float(
+                        np.sin(np.deg2rad(setting["angle_deg"]))
+                        * setting["distance_mm"]
+                    ),
                 )
                 for name, setting in GE_HELIOS_UNIFORMITY_ROI_SETTINGS.items()
                 if name != "Center"
@@ -510,8 +516,14 @@ class GECTQAConfig(BaseModel):
             high_contrast_bar_sizes_mm=GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
             high_contrast_roi_positions_mm={
                 name: (
-                    float(np.cos(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
-                    float(np.sin(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
+                    float(
+                        np.cos(np.deg2rad(setting["angle_deg"]))
+                        * setting["distance_mm"]
+                    ),
+                    float(
+                        np.sin(np.deg2rad(setting["angle_deg"]))
+                        * setting["distance_mm"]
+                    ),
                 )
                 for name, setting in GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS.items()
             },
@@ -1570,6 +1582,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             "reference_source",
             "reference_protocol",
             "expected_diameter_range_mm",
+            "geometry_available",
             "orientation_default_deg",
             "ct_number_rois",
             "contrast_scale",
@@ -1577,12 +1590,24 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             "noise_tolerance_hu",
             "uniformity_reference_hu",
             "uniformity_tolerance_hu",
+            "uniformity_center_roi_size_mm",
+            "uniformity_peripheral_roi_size_mm",
+            "uniformity_peripheral_offsets_mm",
             "high_contrast_rois",
+            "high_contrast_bar_sizes_mm",
+            "high_contrast_roi_positions_mm",
+            "high_contrast_roi_sizes_mm",
             "mtf_method",
             "mtf_requested_levels",
             "low_contrast",
             "slice_thickness",
+            "expected_center_x_mm",
+            "expected_center_y_mm",
+            "phantom_center_detection_method",
             "positioning_tolerance_mm",
+            "alignment_acquisition_type",
+            "external_marker_geometry",
+            "laser_reference_geometry",
         )
         fields: dict[str, dict[str, Any]] = {}
         current_values = self.config.model_dump(mode="json")
@@ -2724,7 +2749,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         ]
         unmeasured_bar_sizes = [
             size
-            for size in GE_QA_HIGH_CONTRAST_BAR_SIZES_MM
+            for size in self.config.high_contrast_bar_sizes_mm
             if not any(np.isclose(size, measured) for measured in measured_bar_sizes)
         ]
         return GECTQAHighContrastResult(
@@ -3025,8 +3050,14 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         tolerance = self._reference_number(
             "positioning_tolerance_mm", self.config.positioning_tolerance_mm
         )
-        offset_x = self._current_localization.phantom_center_x_mm
-        offset_y = self._current_localization.phantom_center_y_mm
+        offset_x = (
+            self._current_localization.phantom_center_x_mm
+            - self.config.expected_center_x_mm
+        )
+        offset_y = (
+            self._current_localization.phantom_center_y_mm
+            - self.config.expected_center_y_mm
+        )
         passed = (
             max(abs(offset_x), abs(offset_y)) <= tolerance
             if tolerance is not None
@@ -3039,6 +3070,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             offset_y_mm=offset_y,
             rotation_deg=self._current_localization.phantom_rotation_deg,
             tolerance_mm=tolerance,
+            expected_center_x_mm=self.config.expected_center_x_mm,
+            expected_center_y_mm=self.config.expected_center_y_mm,
             excess_mm=(
                 max(0.0, max(abs(offset_x), abs(offset_y)) - tolerance)
                 if tolerance is not None
@@ -3137,7 +3170,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 "high_contrast_1_6mm_tolerance_hu",
                 first_high.tolerance_hu if first_high else None,
             ),
-            high_contrast_bar_sizes_mm=GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
+            high_contrast_bar_sizes_mm=self.config.high_contrast_bar_sizes_mm,
             positioning_tolerance_mm=parameter_value(
                 "positioning_tolerance_mm", self.config.positioning_tolerance_mm
             ),
@@ -3386,6 +3419,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     "A routine CT DICOM series does not contain external laser or "
                     "light-field markers. Supply a dedicated alignment acquisition."
                 ),
+                acquisition_type=self.config.alignment_acquisition_type,
+                external_marker_geometry=self.config.external_marker_geometry,
+                laser_reference_geometry=self.config.laser_reference_geometry,
             ),
         }
         for test in self._analysis.values():
@@ -3480,17 +3516,23 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             else f"  MTF {name}%: unavailable - {result.status.lower()}"
             for name, result in data.high_contrast_resolution.mtf_results.items()
         ]
+        reference_scope = {
+            "shared_ge_reference": "Shared GE reference",
+            "manufacturer_reference": "Manufacturer/reference value",
+            "algorithm_default": "Algorithm default",
+        }.get(data.reference.reference_scope, data.reference.reference_scope)
         lines = [
             "GE CT QA Phantom Analysis",
             "-------------------------",
             f"Phantom: {data.phantom_model}",
-            f"Scanner: {data.scanner_model or 'unknown'}",
+            f"Scanner: {data.configuration.scanner_display_name}",
+            f"Scanner model from DICOM: {data.scanner_model or 'unknown'}",
             f"Selected scanner profile: {data.configuration.scanner_display_name} ({data.configuration.scanner_id})",
             f"Selected phantom profile: {data.configuration.phantom_display_name} ({data.configuration.phantom_id})",
             f"Profile selection source: {data.configuration.source}",
             f"Reference applicability: {data.reference.scanner_reference_status}",
             f"Reference source: {data.reference.source}",
-            f"Reference scope: {data.reference.reference_scope}",
+            f"Reference scope: {reference_scope}",
             f"User overrides: {self.config.user_overrides or 'none'}",
             f"Algorithm version: {data.pylinac_version}",
             "Acquisition identity",
