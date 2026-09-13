@@ -15,7 +15,7 @@ import webbrowser
 from collections.abc import Sequence
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, Literal
+from typing import Any, BinaryIO, Literal
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -43,20 +43,197 @@ GE_QA_SECTION_3_LOCATION_MM = 60.0
 GE_QA_HIGH_CONTRAST_BAR_SIZES_MM = (1.6, 1.3, 1.0, 0.8, 0.6, 0.5)
 
 GE_HELIOS_CONTRAST_SCALE_ROI_SETTINGS = {
-    "Plexiglass": {"width_mm": 10.0, "height_mm": 10.0, "distance_mm": 35.0, "angle_deg": -135.0},
-    "Water": {"width_mm": 10.0, "height_mm": 10.0, "distance_mm": 75.0, "angle_deg": -90.0},
+    "Plexiglass": {
+        "width_mm": 10.0,
+        "height_mm": 10.0,
+        "distance_mm": 35.0,
+        "angle_deg": -135.0,
+    },
+    "Water": {
+        "width_mm": 10.0,
+        "height_mm": 10.0,
+        "distance_mm": 75.0,
+        "angle_deg": -90.0,
+    },
 }
 GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS = {
-    "1.6mm": {"width_mm": 8.0, "distance_mm": 42.0, "angle_deg": -53.0, "bar_size_mm": 1.6},
-    "1.3mm": {"width_mm": 7.0, "distance_mm": 21.0, "angle_deg": -62.0, "bar_size_mm": 1.3},
-    "1.0mm": {"width_mm": 6.0, "distance_mm": 5.0, "angle_deg": -120.0, "bar_size_mm": 1.0},
-    "0.8mm": {"width_mm": 5.0, "distance_mm": 16.0, "angle_deg": 146.0, "bar_size_mm": 0.8},
+    "1.6mm": {
+        "width_mm": 8.0,
+        "distance_mm": 42.0,
+        "angle_deg": -53.0,
+        "bar_size_mm": 1.6,
+    },
+    "1.3mm": {
+        "width_mm": 7.0,
+        "distance_mm": 21.0,
+        "angle_deg": -62.0,
+        "bar_size_mm": 1.3,
+    },
+    "1.0mm": {
+        "width_mm": 6.0,
+        "distance_mm": 5.0,
+        "angle_deg": -120.0,
+        "bar_size_mm": 1.0,
+    },
+    "0.8mm": {
+        "width_mm": 5.0,
+        "distance_mm": 16.0,
+        "angle_deg": 146.0,
+        "bar_size_mm": 0.8,
+    },
 }
 GE_HELIOS_UNIFORMITY_ROI_SETTINGS = {
-    "Center": {"width_mm": 15.0, "height_mm": 15.0, "distance_mm": 0.0, "angle_deg": 0.0},
-    "12 o'clock": {"width_mm": 15.0, "height_mm": 15.0, "distance_mm": 75.0, "angle_deg": -90.0},
-    "3 o'clock": {"width_mm": 15.0, "height_mm": 15.0, "distance_mm": 75.0, "angle_deg": 0.0},
+    "Center": {
+        "width_mm": 15.0,
+        "height_mm": 15.0,
+        "distance_mm": 0.0,
+        "angle_deg": 0.0,
+    },
+    "12 o'clock": {
+        "width_mm": 15.0,
+        "height_mm": 15.0,
+        "distance_mm": 75.0,
+        "angle_deg": -90.0,
+    },
+    "3 o'clock": {
+        "width_mm": 15.0,
+        "height_mm": 15.0,
+        "distance_mm": 75.0,
+        "angle_deg": 0.0,
+    },
 }
+
+GE_OPTIMA_CT = "GE_OPTIMA_CT"
+GE_HELIOS_CT = "GE_HELIOS_CT"
+GE_LIGHTSPEED16 = "GE_LIGHTSPEED16"
+GENERIC_GE_CT = "GENERIC_GE_CT"
+CUSTOM = "CUSTOM"
+
+GE_20CM_QA_PHANTOM = "GE_20CM_QA_PHANTOM"
+GE_HELIOS_COMPATIBLE_QA_PHANTOM = "GE_HELIOS_COMPATIBLE_QA_PHANTOM"
+GE_OPTIMA_QA_PHANTOM = "GE_OPTIMA_QA_PHANTOM"
+CUSTOM_PHANTOM = "CUSTOM_PHANTOM"
+
+GECTQAStatus = Literal[
+    "PASS",
+    "FAIL",
+    "NOT_EVALUATED",
+    "UNAVAILABLE",
+    "WARNING",
+    "EXTRAPOLATED",
+]
+
+
+class GECTQAReferenceParameter(BaseModel):
+    """Traceable metadata for one configured reference parameter."""
+
+    value: float | int | str | bool | None
+    default_value: float | int | str | bool | None = None
+    unit: str | None = None
+    source: str | None = None
+    source_section: str | None = None
+    is_default: bool = True
+    is_user_override: bool = False
+    validation_status: str = "unvalidated"
+    reference_scope: str = "algorithm_default"
+    notes: str | None = None
+
+
+class GECTQAReferenceParameters(BaseModel):
+    """Reference values for a scanner/phantom/protocol combination."""
+
+    parameters: dict[str, GECTQAReferenceParameter] = Field(default_factory=dict)
+
+    def get(self, name: str) -> GECTQAReferenceParameter | None:
+        """Return a named parameter, if configured."""
+        return self.parameters.get(name)
+
+
+class GECTQAScannerProfile(BaseModel):
+    """Scanner identity and defaults used by GE CT QA configuration."""
+
+    scanner_id: str
+    display_name: str
+    manufacturer: str = "GE"
+    model_patterns: tuple[str, ...] = ()
+    default_phantom_profile: str = GE_20CM_QA_PHANTOM
+    reference_source: str | None = None
+    reference_protocol: str | None = None
+    default_parameters: dict[str, Any] = Field(default_factory=dict)
+    supported_tests: tuple[str, ...] = ()
+    validation_status: str = "unvalidated"
+
+
+class GECTQAPhantomProfile(BaseModel):
+    """Physical phantom identity and geometry independent of scanner identity."""
+
+    phantom_id: str
+    display_name: str
+    manufacturer: str = "GE"
+    nominal_diameter_mm: float | None = None
+    outer_boundary_detection: dict[str, Any] = Field(default_factory=dict)
+    orientation_detection: dict[str, Any] = Field(default_factory=dict)
+    orientation_default_deg: float | None = None
+    orientation_override_allowed: bool = True
+    center_reference: dict[str, Any] = Field(default_factory=dict)
+    roi_definitions: dict[str, Any] = Field(default_factory=dict)
+    module_locations: dict[str, Any] = Field(default_factory=dict)
+    slice_thickness_insert: dict[str, Any] | None = None
+    low_contrast_geometry: dict[str, Any] | None = None
+    high_contrast_geometry: dict[str, Any] | None = None
+    positioning_reference: dict[str, Any] = Field(default_factory=dict)
+    alignment_requirements: dict[str, Any] = Field(default_factory=dict)
+    validation_status: str = "unvalidated"
+    shared_geometry_profile: str | None = None
+
+
+class GECTQAProfileSelection(BaseModel):
+    """Resolved scanner/phantom profile identity and selection provenance."""
+
+    scanner_id: str
+    scanner_display_name: str
+    phantom_id: str
+    phantom_display_name: str
+    source: Literal["dicom", "user", "fallback", "mixed"]
+    scanner_source: Literal["dicom", "user", "fallback"]
+    phantom_source: Literal["dicom", "user", "fallback"]
+    scanner_model_from_dicom: str | None = None
+    reference_source: str | None = None
+    reference_scope: str = "algorithm_default"
+    validation_status: str = "unvalidated"
+    warnings: list[str] = Field(default_factory=list)
+
+
+def _shared_ge_reference_parameters() -> dict[str, GECTQAReferenceParameter]:
+    """Return the documented GE values with explicit shared-reference scope."""
+    source_section = "Chapter 12, Quality Assurance"
+    values = {
+        "water_nominal_hu": (0.0, "HU"),
+        "water_tolerance_hu": (3.0, "HU"),
+        "plexiglass_water_difference_hu": (120.0, "HU"),
+        "plexiglass_water_tolerance_hu": (12.0, "HU"),
+        "noise_nominal_hu": (3.2, "HU"),
+        "noise_tolerance_hu": (0.3, "HU"),
+        "uniformity_difference_nominal_hu": (0.0, "HU"),
+        "uniformity_difference_tolerance_hu": (3.0, "HU"),
+        "high_contrast_1_6mm_std_hu": (37.0, "HU"),
+        "high_contrast_1_6mm_tolerance_hu": (4.0, "HU"),
+        "positioning_tolerance_mm": (2.0, "mm"),
+    }
+    return {
+        name: GECTQAReferenceParameter(
+            value=value,
+            default_value=value,
+            unit=unit,
+            source=GE_QA_REFERENCE_SOURCE,
+            source_section=source_section,
+            is_default=True,
+            validation_status="shared_reference_not_scanner_validated",
+            reference_scope="shared_ge_reference",
+            notes="Shared GE reference; local scanner and phantom validation is required.",
+        )
+        for name, (value, unit) in values.items()
+    }
 
 
 def _rectangular_roi(
@@ -159,6 +336,9 @@ class GECTQALowContrastConfig(BaseModel):
     targets: dict[str, GECTQALowContrastTarget]
     cnr_threshold: float | None = None
     minimum_visible_targets: int | None = None
+    target_geometry: dict[str, Any] = Field(default_factory=dict)
+    target_contrast_hu: float | None = None
+    visual_observer_required: bool = True
 
 
 class GECTQASliceThicknessConfig(BaseModel):
@@ -172,6 +352,8 @@ class GECTQASliceThicknessConfig(BaseModel):
     tolerance_mm: float | None = None
     correction_factor: float = 1.0
     method: str = "profile_fwhm"
+    insert_geometry: dict[str, Any] | None = None
+    profile_calibration: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_correction(self) -> GECTQASliceThicknessConfig:
@@ -194,8 +376,22 @@ class GECTQAConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     phantom_model: str = "GE 20 cm QA Phantom"
+    scanner_profile: str | None = None
+    phantom_profile: str | None = GE_20CM_QA_PHANTOM
     reference_source: str | None = None
+    reference_protocol: str | None = None
+    reference_parameters: dict[str, GECTQAReferenceParameter] = Field(
+        default_factory=dict
+    )
+    user_overrides: dict[str, Any] = Field(default_factory=dict)
     expected_diameter_range_mm: tuple[float, float] = (200.0, 215.0)
+    orientation_detection_method: Literal["automatic", "manual", "fixed_default"] = (
+        "automatic"
+    )
+    orientation_default_deg: float | None = 0.0
+    orientation_default_validated: bool = False
+    orientation_override_allowed: bool = True
+    geometry_available: bool = True
     section1_location_mm: float = GE_QA_SECTION_1_LOCATION_MM
     section3_location_mm: float = GE_QA_SECTION_3_LOCATION_MM
     automatic_module_detection: bool = False
@@ -210,15 +406,35 @@ class GECTQAConfig(BaseModel):
     uniformity_offset_mm: float = 0
     uniformity_rois: dict[str, GECTQAROI] = Field(default_factory=dict)
     uniformity_center_name: str = "center"
+    uniformity_center_roi_size_mm: tuple[float, float] | None = None
+    uniformity_peripheral_roi_size_mm: tuple[float, float] | None = None
+    uniformity_peripheral_offsets_mm: dict[str, tuple[float, float]] = Field(
+        default_factory=dict
+    )
     uniformity_reference_hu: float | None = None
     uniformity_tolerance_hu: float | None = None
     high_contrast_offset_mm: float = 0
     high_contrast_rois: dict[str, GECTQAHighContrastROI] = Field(default_factory=dict)
+    high_contrast_bar_sizes_mm: tuple[float, ...] = GE_QA_HIGH_CONTRAST_BAR_SIZES_MM
+    high_contrast_roi_positions_mm: dict[str, tuple[float, float]] = Field(
+        default_factory=dict
+    )
+    high_contrast_roi_sizes_mm: dict[str, tuple[float, float]] = Field(
+        default_factory=dict
+    )
+    mtf_method: str = "relative_peak_valley"
+    mtf_requested_levels: tuple[int, ...] = tuple(range(10, 100, 10))
     minimum_resolution_lp_mm: float | None = None
     low_contrast_offset_mm: float = 0
     low_contrast: GECTQALowContrastConfig | None = None
     slice_thickness: GECTQASliceThicknessConfig | None = None
+    expected_center_x_mm: float = 0.0
+    expected_center_y_mm: float = 0.0
+    phantom_center_detection_method: str = "circular_boundary"
     positioning_tolerance_mm: float | None = None
+    alignment_acquisition_type: str = "routine_ct"
+    external_marker_geometry: dict[str, Any] | None = None
+    laser_reference_geometry: dict[str, Any] | None = None
 
     @model_validator(mode="after")
     def validate_diameter_range(self) -> GECTQAConfig:
@@ -247,8 +463,16 @@ class GECTQAConfig(BaseModel):
             for name, setting in GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS.items()
         }
         return cls(
+            scanner_profile=GENERIC_GE_CT,
+            phantom_profile=GE_20CM_QA_PHANTOM,
             reference_source=GE_QA_REFERENCE_SOURCE,
+            reference_protocol="GE CT Technical Reference Manual 5800010-1ENr2, Chapter 12",
+            reference_parameters=_shared_ge_reference_parameters(),
             automatic_module_detection=True,
+            orientation_detection_method="fixed_default",
+            orientation_default_deg=0.0,
+            orientation_default_validated=True,
+            geometry_available=True,
             ct_number_rois={
                 "Plexiglass": _rectangular_roi(contrast_rois["Plexiglass"]),
                 "Water": _rectangular_roi(
@@ -270,15 +494,415 @@ class GECTQAConfig(BaseModel):
                 for name, setting in GE_HELIOS_UNIFORMITY_ROI_SETTINGS.items()
             },
             uniformity_center_name="Center",
+            uniformity_center_roi_size_mm=(15.0, 15.0),
+            uniformity_peripheral_roi_size_mm=(15.0, 15.0),
+            uniformity_peripheral_offsets_mm={
+                name: (
+                    float(np.cos(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
+                    float(np.sin(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
+                )
+                for name, setting in GE_HELIOS_UNIFORMITY_ROI_SETTINGS.items()
+                if name != "Center"
+            },
             uniformity_reference_hu=0.0,
             uniformity_tolerance_hu=3.0,
             high_contrast_rois=high_contrast_rois,
+            high_contrast_bar_sizes_mm=GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
+            high_contrast_roi_positions_mm={
+                name: (
+                    float(np.cos(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
+                    float(np.sin(np.deg2rad(setting["angle_deg"])) * setting["distance_mm"]),
+                )
+                for name, setting in GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS.items()
+            },
+            high_contrast_roi_sizes_mm={
+                name: (
+                    float(setting["width_mm"]),
+                    float(setting.get("height_mm", setting["width_mm"])),
+                )
+                for name, setting in GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS.items()
+            },
             low_contrast=GECTQALowContrastConfig(
                 background=GECTQAROI(x_mm=0, y_mm=0, width_mm=5, height_mm=5),
                 targets={},
             ),
             positioning_tolerance_mm=2.0,
         )
+
+    @classmethod
+    def from_profile(
+        cls,
+        scanner_id: str = GENERIC_GE_CT,
+        phantom_id: str | None = None,
+        user_overrides: dict[str, Any] | None = None,
+    ) -> GECTQAConfig:
+        """Build a configuration from separate scanner and phantom profiles."""
+        scanner = get_scanner_profile(scanner_id)
+        resolved_phantom_id = phantom_id or scanner.default_phantom_profile
+        phantom = get_phantom_profile(resolved_phantom_id)
+        reference_parameters = get_reference_parameters(
+            scanner.scanner_id, phantom.phantom_id
+        )
+        shared_geometry = phantom.phantom_id in {
+            GE_20CM_QA_PHANTOM,
+            GE_HELIOS_COMPATIBLE_QA_PHANTOM,
+        }
+        if shared_geometry:
+            config = cls.from_ge_manual()
+            config = config.model_copy(
+                update={
+                    "scanner_profile": scanner.scanner_id,
+                    "phantom_profile": phantom.phantom_id,
+                    "phantom_model": phantom.display_name,
+                    "reference_source": scanner.reference_source,
+                    "reference_protocol": scanner.reference_protocol,
+                    "reference_parameters": reference_parameters,
+                    "expected_diameter_range_mm": tuple(
+                        phantom.outer_boundary_detection.get(
+                            "diameter_range_mm", config.expected_diameter_range_mm
+                        )
+                    ),
+                    "orientation_default_deg": phantom.orientation_default_deg,
+                    "orientation_default_validated": bool(
+                        phantom.orientation_detection.get("default_validated", False)
+                    ),
+                    "geometry_available": shared_geometry,
+                    "orientation_detection_method": phantom.orientation_detection.get(
+                        "method", "automatic"
+                    ),
+                }
+            )
+        else:
+            config = cls(
+                scanner_profile=scanner.scanner_id,
+                phantom_profile=phantom.phantom_id,
+                phantom_model=phantom.display_name,
+                reference_source=scanner.reference_source,
+                reference_protocol=scanner.reference_protocol,
+                reference_parameters=reference_parameters,
+                expected_diameter_range_mm=tuple(
+                    phantom.outer_boundary_detection.get(
+                        "diameter_range_mm", (200.0, 215.0)
+                    )
+                ),
+                orientation_detection_method=phantom.orientation_detection.get(
+                    "method", "automatic"
+                ),
+                orientation_default_deg=phantom.orientation_default_deg,
+                orientation_default_validated=bool(
+                    phantom.orientation_detection.get("default_validated", False)
+                ),
+                orientation_override_allowed=phantom.orientation_override_allowed,
+                geometry_available=shared_geometry,
+            )
+        if user_overrides:
+            config = config.model_copy(
+                update={"user_overrides": dict(user_overrides)}
+            ).with_user_overrides()
+        return config
+
+    def with_user_overrides(self) -> GECTQAConfig:
+        """Apply transient user overrides while retaining their provenance."""
+        if not self.user_overrides:
+            return self
+        payload = self.model_dump(mode="python")
+        payload.pop("user_overrides", None)
+        for path, value in self.user_overrides.items():
+            target: dict[str, Any] = payload
+            components = path.split(".")
+            for component in components[:-1]:
+                current = target.get(component)
+                if isinstance(current, BaseModel):
+                    current = current.model_dump(mode="python")
+                    target[component] = current
+                if not isinstance(current, dict):
+                    raise ValueError(f"Unknown GE CT QA override path: {path}")
+                target = current
+            if components[-1] not in target:
+                raise ValueError(f"Unknown GE CT QA override path: {path}")
+            target[components[-1]] = value
+        payload["user_overrides"] = dict(self.user_overrides)
+        updated = type(self).model_validate(payload)
+        parameter_aliases = {
+            "noise_reference_hu": "noise_nominal_hu",
+            "noise_tolerance_hu": "noise_tolerance_hu",
+            "uniformity_reference_hu": "uniformity_difference_nominal_hu",
+            "uniformity_tolerance_hu": "uniformity_difference_tolerance_hu",
+            "positioning_tolerance_mm": "positioning_tolerance_mm",
+        }
+        parameters = dict(updated.reference_parameters)
+        for path, value in self.user_overrides.items():
+            parameter_name = parameter_aliases.get(path)
+            if parameter_name is None:
+                continue
+            existing = parameters.get(parameter_name)
+            if existing is not None:
+                parameters[parameter_name] = existing.model_copy(
+                    update={
+                        "value": value,
+                        "is_user_override": True,
+                        "is_default": False,
+                    }
+                )
+        return updated.model_copy(update={"reference_parameters": parameters})
+
+
+SUPPORTED_GE_QA_TESTS = (
+    "ct_number",
+    "contrast_scale",
+    "noise",
+    "uniformity",
+    "high_contrast_resolution",
+    "low_contrast",
+    "slice_thickness",
+    "positioning",
+    "alignment",
+)
+
+
+SCANNER_PROFILES: dict[str, GECTQAScannerProfile] = {
+    GE_OPTIMA_CT: GECTQAScannerProfile(
+        scanner_id=GE_OPTIMA_CT,
+        display_name="GE Optima CT",
+        model_patterns=("optima",),
+        default_phantom_profile=GE_OPTIMA_QA_PHANTOM,
+        reference_source=GE_QA_REFERENCE_SOURCE,
+        reference_protocol="GE CT QA reference; scanner-specific validation not supplied",
+        default_parameters={"reference_scope": "shared_ge_reference"},
+        supported_tests=SUPPORTED_GE_QA_TESTS,
+        validation_status="scanner_profile_identity_only",
+    ),
+    GE_HELIOS_CT: GECTQAScannerProfile(
+        scanner_id=GE_HELIOS_CT,
+        display_name="GE Helios CT",
+        model_patterns=("helios",),
+        default_phantom_profile=GE_HELIOS_COMPATIBLE_QA_PHANTOM,
+        reference_source=GE_QA_REFERENCE_SOURCE,
+        reference_protocol="GE CT QA reference; scanner-specific validation not supplied",
+        default_parameters={"reference_scope": "shared_ge_reference"},
+        supported_tests=SUPPORTED_GE_QA_TESTS,
+        validation_status="scanner_profile_identity_only",
+    ),
+    GE_LIGHTSPEED16: GECTQAScannerProfile(
+        scanner_id=GE_LIGHTSPEED16,
+        display_name="GE LightSpeed16",
+        model_patterns=("lightspeed16", "lightspeed 16"),
+        default_phantom_profile=GE_20CM_QA_PHANTOM,
+        reference_source=GE_QA_REFERENCE_SOURCE,
+        reference_protocol="GE CT Technical Reference Manual 5800010-1ENr2, Chapter 12",
+        default_parameters={"reference_scope": "shared_ge_reference"},
+        supported_tests=SUPPORTED_GE_QA_TESTS,
+        validation_status="model_detected_reference_shared",
+    ),
+    GENERIC_GE_CT: GECTQAScannerProfile(
+        scanner_id=GENERIC_GE_CT,
+        display_name="Generic GE CT",
+        model_patterns=(),
+        default_phantom_profile=GE_20CM_QA_PHANTOM,
+        reference_source=GE_QA_REFERENCE_SOURCE,
+        reference_protocol="GE CT QA reference; scanner model unknown",
+        default_parameters={"reference_scope": "shared_ge_reference"},
+        supported_tests=SUPPORTED_GE_QA_TESTS,
+        validation_status="generic_fallback",
+    ),
+    CUSTOM: GECTQAScannerProfile(
+        scanner_id=CUSTOM,
+        display_name="Custom scanner",
+        default_phantom_profile=CUSTOM_PHANTOM,
+        reference_source=None,
+        reference_protocol=None,
+        default_parameters={},
+        supported_tests=(),
+        validation_status="user_configured",
+    ),
+}
+
+
+PHANTOM_PROFILES: dict[str, GECTQAPhantomProfile] = {
+    GE_20CM_QA_PHANTOM: GECTQAPhantomProfile(
+        phantom_id=GE_20CM_QA_PHANTOM,
+        display_name="GE 20 cm QA Phantom",
+        nominal_diameter_mm=200.0,
+        outer_boundary_detection={
+            "method": "circular_boundary",
+            "diameter_range_mm": (200.0, 215.0),
+        },
+        orientation_detection={
+            "method": "fixed_default",
+            "default_validated": True,
+        },
+        orientation_default_deg=0.0,
+        orientation_override_allowed=True,
+        center_reference={"method": "image_center"},
+        roi_definitions={
+            "contrast_scale": GE_HELIOS_CONTRAST_SCALE_ROI_SETTINGS,
+            "high_contrast": GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS,
+            "uniformity": GE_HELIOS_UNIFORMITY_ROI_SETTINGS,
+        },
+        module_locations={
+            "method": "content_detection",
+            "section1_mm": 0.0,
+            "section3_mm": 60.0,
+        },
+        slice_thickness_insert={"available": False, "requires_local_calibration": True},
+        low_contrast_geometry={
+            "visual_observer_required": True,
+            "grid_cell_size_mm": 5.0,
+        },
+        high_contrast_geometry={
+            "method": "configured_roi_statistics",
+            "bar_sizes_mm": GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
+        },
+        positioning_reference={"tolerance_mm": 2.0},
+        alignment_requirements={"dedicated_acquisition_required": True},
+        validation_status="geometry_from_shared_ge_manual",
+    ),
+    GE_HELIOS_COMPATIBLE_QA_PHANTOM: GECTQAPhantomProfile(
+        phantom_id=GE_HELIOS_COMPATIBLE_QA_PHANTOM,
+        display_name="GE Helios-compatible QA Phantom",
+        nominal_diameter_mm=200.0,
+        outer_boundary_detection={
+            "method": "circular_boundary",
+            "diameter_range_mm": (200.0, 215.0),
+        },
+        orientation_detection={"method": "automatic", "default_validated": False},
+        orientation_default_deg=0.0,
+        orientation_override_allowed=True,
+        center_reference={"method": "image_center"},
+        roi_definitions={
+            "contrast_scale": GE_HELIOS_CONTRAST_SCALE_ROI_SETTINGS,
+            "high_contrast": GE_HELIOS_HIGH_CONTRAST_ROI_SETTINGS,
+            "uniformity": GE_HELIOS_UNIFORMITY_ROI_SETTINGS,
+        },
+        module_locations={"method": "content_detection"},
+        slice_thickness_insert={"available": False, "requires_local_calibration": True},
+        low_contrast_geometry={
+            "visual_observer_required": True,
+            "grid_cell_size_mm": 5.0,
+        },
+        high_contrast_geometry={
+            "method": "helios_compatible_roi_statistics",
+            "bar_sizes_mm": GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
+        },
+        positioning_reference={"tolerance_mm": 2.0},
+        alignment_requirements={"dedicated_acquisition_required": True},
+        validation_status="compatible_geometry_not_physical_identity",
+    ),
+    GE_OPTIMA_QA_PHANTOM: GECTQAPhantomProfile(
+        phantom_id=GE_OPTIMA_QA_PHANTOM,
+        display_name="GE Optima QA Phantom",
+        nominal_diameter_mm=None,
+        outer_boundary_detection={"method": "user_supplied_geometry"},
+        orientation_detection={"method": "manual", "default_validated": False},
+        orientation_default_deg=None,
+        orientation_override_allowed=True,
+        center_reference={"method": "user_supplied_geometry"},
+        module_locations={},
+        slice_thickness_insert=None,
+        low_contrast_geometry=None,
+        high_contrast_geometry=None,
+        positioning_reference={},
+        alignment_requirements={"dedicated_acquisition_required": True},
+        validation_status="verified_geometry_missing",
+    ),
+    CUSTOM_PHANTOM: GECTQAPhantomProfile(
+        phantom_id=CUSTOM_PHANTOM,
+        display_name="Custom Phantom",
+        nominal_diameter_mm=None,
+        outer_boundary_detection={"method": "user_supplied_geometry"},
+        orientation_detection={"method": "manual", "default_validated": False},
+        orientation_default_deg=None,
+        orientation_override_allowed=True,
+        center_reference={"method": "user_supplied_geometry"},
+        alignment_requirements={"dedicated_acquisition_required": True},
+        validation_status="user_configured",
+    ),
+}
+
+
+def get_scanner_profile(scanner_id: str) -> GECTQAScannerProfile:
+    """Return a registered scanner profile or raise for an invalid ID."""
+    try:
+        return SCANNER_PROFILES[scanner_id]
+    except KeyError as exc:
+        raise ValueError(f"Unknown GE CT scanner profile: {scanner_id}") from exc
+
+
+def get_phantom_profile(phantom_id: str) -> GECTQAPhantomProfile:
+    """Return a registered phantom profile or raise for an invalid ID."""
+    try:
+        return PHANTOM_PROFILES[phantom_id]
+    except KeyError as exc:
+        raise ValueError(f"Unknown GE CT phantom profile: {phantom_id}") from exc
+
+
+def get_reference_parameters(
+    scanner_id: str, phantom_id: str
+) -> dict[str, GECTQAReferenceParameter]:
+    """Return a copy of the registered reference metadata for a combination."""
+    parameters = REFERENCE_PROFILES.get((scanner_id, phantom_id))
+    if parameters is None and scanner_id != CUSTOM and phantom_id != CUSTOM_PHANTOM:
+        parameters = _shared_ge_reference_parameters()
+    if parameters is None:
+        parameters = {}
+    return {
+        name: parameter.model_copy(deep=True) for name, parameter in parameters.items()
+    }
+
+
+def detect_scanner_profile(
+    manufacturer: str | None, manufacturer_model_name: str | None
+) -> tuple[GECTQAScannerProfile, list[str]]:
+    """Resolve a scanner profile from DICOM identity without guessing a model."""
+    model = (manufacturer_model_name or "").strip()
+    normalized_model = "".join(
+        character for character in model.lower() if character.isalnum()
+    )
+    manufacturer_is_ge = "ge" in (manufacturer or "").lower()
+    for profile in SCANNER_PROFILES.values():
+        if profile.scanner_id in {GENERIC_GE_CT, CUSTOM}:
+            continue
+        if manufacturer and not manufacturer_is_ge:
+            continue
+        if any(
+            "".join(character for character in pattern.lower() if character.isalnum())
+            in normalized_model
+            for pattern in profile.model_patterns
+        ):
+            return profile, []
+    message = "Unknown scanner model — generic GE defaults applied."
+    if not manufacturer_is_ge:
+        message = f"{message} DICOM manufacturer is not GE."
+    return SCANNER_PROFILES[GENERIC_GE_CT], [message]
+
+
+def detect_phantom_profile(
+    metadata_values: Sequence[str | None],
+    scanner_profile: GECTQAScannerProfile,
+) -> tuple[GECTQAPhantomProfile, Literal["dicom", "fallback"], list[str]]:
+    """Resolve an explicit phantom mention, otherwise use the scanner default."""
+    text = " ".join(value.lower() for value in metadata_values if value)
+    if "helios" in text:
+        return (
+            PHANTOM_PROFILES[GE_HELIOS_COMPATIBLE_QA_PHANTOM],
+            "dicom",
+            [],
+        )
+    if "optima" in text:
+        return PHANTOM_PROFILES[GE_OPTIMA_QA_PHANTOM], "dicom", []
+    return (
+        PHANTOM_PROFILES[scanner_profile.default_phantom_profile],
+        "fallback",
+        [],
+    )
+
+
+REFERENCE_PROFILES: dict[tuple[str, str], dict[str, GECTQAReferenceParameter]] = {
+    (scanner_id, phantom_id): _shared_ge_reference_parameters()
+    for scanner_id in SCANNER_PROFILES
+    for phantom_id in PHANTOM_PROFILES
+    if scanner_id != CUSTOM and phantom_id != CUSTOM_PHANTOM
+}
 
 
 class GECTQAROIResult(BaseModel):
@@ -319,7 +943,32 @@ class GECTQATestResult(BaseModel):
 
     available: bool
     passed: bool | None
+    status: GECTQAStatus = "NOT_EVALUATED"
+    measured_value: float | int | str | None = None
+    nominal_value: float | int | str | None = None
+    tolerance: float | None = None
+    difference: float | None = None
+    unit: str | None = None
+    method: str | None = None
+    reference_source: str | None = None
+    reference_scope: str | None = None
+    confidence: float | None = None
     reason: str | None = None
+    warnings: list[str] = Field(default_factory=list)
+    parameters_used: dict[str, Any] = Field(default_factory=dict)
+    overrides_used: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def derive_status(self) -> GECTQATestResult:
+        """Keep legacy ``passed`` and the explicit status synchronized."""
+        if not self.available:
+            self.status = "UNAVAILABLE"
+        elif self.status == "NOT_EVALUATED":
+            if self.passed is True:
+                self.status = "PASS"
+            elif self.passed is False:
+                self.status = "FAIL"
+        return self
 
 
 class GECTQACTNumberResult(GECTQATestResult):
@@ -379,6 +1028,19 @@ class GECTQAHighContrastROIResult(GECTQAROIResult):
     passed: bool | None = None
 
 
+class GECTQAMTFResult(BaseModel):
+    """One requested relative-MTF level and how its value was obtained."""
+
+    requested_mtf_percent: int
+    measured_directly: bool
+    interpolated: bool = False
+    extrapolated: bool = False
+    value: float | None = None
+    status: GECTQAStatus
+    validity: GECTQAStatus
+    reason: str | None = None
+
+
 class GECTQAHighContrastResult(GECTQATestResult):
     """Results for configured high-contrast line-pair samples."""
 
@@ -387,6 +1049,7 @@ class GECTQAHighContrastResult(GECTQATestResult):
     resolution_lp_mm: float | None = None
     resolution_lp_cm: float | None = None
     mtf: dict[str, float] | None = None
+    mtf_results: dict[str, GECTQAMTFResult] = Field(default_factory=dict)
     method: str = "Helios-compatible ROI standard deviation and relative MTF"
     measured_bar_sizes_mm: list[float] = Field(default_factory=list)
     unmeasured_bar_sizes_mm: list[float] = Field(default_factory=list)
@@ -449,6 +1112,7 @@ class GECTQAPositioningResult(GECTQATestResult):
     offset_y_mm: float | None = None
     rotation_deg: float | None = None
     tolerance_mm: float | None = None
+    excess_mm: float | None = None
 
 
 class GECTQAAlignmentResult(GECTQATestResult):
@@ -468,6 +1132,13 @@ class GECTQALocalizationResult(BaseModel):
     phantom_diameter_mm: float
     phantom_rotation_deg: float
     localization_confidence: float
+    orientation_detected: bool = False
+    orientation_source: Literal[
+        "automatic", "manual_override", "phantom_profile_default", "unavailable"
+    ] = "unavailable"
+    orientation_confidence: float | None = None
+    orientation_default_deg: float | None = None
+    orientation_override_deg: float | None = None
 
 
 class GECTQAModuleLocations(BaseModel):
@@ -490,22 +1161,27 @@ class GECTQAModuleLocations(BaseModel):
 class GECTQAReference(BaseModel):
     """Public reference values used by the automatic GE default profile."""
 
-    source: str
+    source: str | None
     section1_scan_location_mm: float
     section3_scan_location_mm: float
-    water_nominal_hu: float
-    water_tolerance_hu: float
-    plexiglass_water_difference_hu: float
-    plexiglass_water_tolerance_hu: float
-    noise_nominal_hu: float
-    noise_tolerance_hu: float
-    uniformity_difference_nominal_hu: float
-    uniformity_difference_tolerance_hu: float
-    high_contrast_1_6mm_std_hu: float
-    high_contrast_1_6mm_tolerance_hu: float
+    water_nominal_hu: float | None
+    water_tolerance_hu: float | None
+    plexiglass_water_difference_hu: float | None
+    plexiglass_water_tolerance_hu: float | None
+    noise_nominal_hu: float | None
+    noise_tolerance_hu: float | None
+    uniformity_difference_nominal_hu: float | None
+    uniformity_difference_tolerance_hu: float | None
+    high_contrast_1_6mm_std_hu: float | None
+    high_contrast_1_6mm_tolerance_hu: float | None
     high_contrast_bar_sizes_mm: tuple[float, ...]
-    positioning_tolerance_mm: float
+    positioning_tolerance_mm: float | None
     scanner_reference_status: str
+    scanner_id: str | None = None
+    phantom_id: str | None = None
+    reference_protocol: str | None = None
+    reference_scope: str = "algorithm_default"
+    parameters: dict[str, GECTQAReferenceParameter] = Field(default_factory=dict)
     clinical_status: str = "public reference; local clinical validation required"
 
 
@@ -608,6 +1284,7 @@ class GECTQAResult(ResultBase):
     """Structured results for the GE 20 cm CT QA phantom."""
 
     phantom_model: str
+    configuration: GECTQAProfileSelection
     reference: GECTQAReference
     metadata: GECTQAMetadata
     scanner_model: str | None
@@ -626,9 +1303,14 @@ class GECTQAResult(ResultBase):
     alignment: GECTQAAlignmentResult
     helios_compatibility: GECTQAHeliosCompatibilityResult | None
     overall_passed: bool | None
+    overall_status: Literal["PASS", "FAIL", "INCOMPLETE", "NOT_VALIDATED"]
     num_tests: int
+    num_assessed: int
     num_passed: int
     num_failed: int
+    num_not_evaluated: int
+    num_unavailable: int
+    num_extrapolated: int
     num_warnings: int
 
 
@@ -660,16 +1342,21 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         config: GECTQAConfig | dict | None = None,
         check_uid: bool = True,
         is_zip: bool = False,
+        scanner_profile: str | None = None,
+        phantom_profile: str | None = None,
     ) -> None:
         super().__init__()
-        self.config = (
-            GECTQAConfig.from_ge_manual()
-            if config is None
-            else GECTQAConfig.model_validate(config)
+        requested_config = (
+            None if config is None else GECTQAConfig.model_validate(config)
         )
         self.dicom_stack = self._load_stack(folderpath, is_zip=is_zip)
         self._validate_stack()
         self._metadata = self._build_metadata()
+        self.config, self._profile_selection = self._resolve_profiles(
+            requested_config,
+            scanner_profile=scanner_profile,
+            phantom_profile=phantom_profile,
+        )
         self._analysis_complete = False
         self._plot_entries: list[tuple[int, object, str]] = []
         self._module_locations: GECTQAModuleLocations | None = None
@@ -680,9 +1367,18 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         zip_file: str | Path | BinaryIO,
         config: GECTQAConfig | dict | None = None,
         check_uid: bool = True,
+        scanner_profile: str | None = None,
+        phantom_profile: str | None = None,
     ) -> GECTQA:
         """Construct an analyzer from a ZIP archive of DICOM images."""
-        return cls(zip_file, config=config, check_uid=check_uid, is_zip=True)
+        return cls(
+            zip_file,
+            config=config,
+            check_uid=check_uid,
+            is_zip=True,
+            scanner_profile=scanner_profile,
+            phantom_profile=phantom_profile,
+        )
 
     @classmethod
     def from_url(
@@ -690,9 +1386,17 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         url: str,
         config: GECTQAConfig | dict | None = None,
         check_uid: bool = True,
+        scanner_profile: str | None = None,
+        phantom_profile: str | None = None,
     ) -> GECTQA:
         """Construct an analyzer from a URL pointing to a DICOM ZIP archive."""
-        return cls.from_zip(get_url(url), config=config, check_uid=check_uid)
+        return cls.from_zip(
+            get_url(url),
+            config=config,
+            check_uid=check_uid,
+            scanner_profile=scanner_profile,
+            phantom_profile=phantom_profile,
+        )
 
     @classmethod
     def from_demo_image(cls):
@@ -706,9 +1410,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     ) -> DicomImageStack:
         try:
             if is_zip:
-                return DicomImageStack.from_zip(
-                    source, min_number=1, check_uid=False
-                )
+                return DicomImageStack.from_zip(source, min_number=1, check_uid=False)
             if isinstance(source, str | Path) and Path(source).is_file():
                 source = [source]
             elif hasattr(source, "read"):
@@ -723,14 +1425,15 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         if len(self.dicom_stack) == 0:
             raise ValueError("No CT DICOM images found.")
         metadatas = self.dicom_stack.metadatas
-        modalities = {str(getattr(metadata, "Modality", "")).upper() for metadata in metadatas}
+        modalities = {
+            str(getattr(metadata, "Modality", "")).upper() for metadata in metadatas
+        }
         if modalities != {"CT"}:
             raise ValueError(
                 f"The GE CT QA analyzer requires CT DICOM images; found {sorted(modalities)}."
             )
         series_uids = {
-            str(getattr(metadata, "SeriesInstanceUID", ""))
-            for metadata in metadatas
+            str(getattr(metadata, "SeriesInstanceUID", "")) for metadata in metadatas
         }
         if len(series_uids) > 1:
             raise ValueError("Multiple incompatible CT series detected.")
@@ -752,7 +1455,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     if image.array.size == 0:
                         raise ValueError("A DICOM image contains no pixel data.")
                 except (AttributeError, KeyError, ValueError, IndexError) as exc:
-                    raise ValueError("A CT DICOM image does not contain pixel data.") from exc
+                    raise ValueError(
+                        "A CT DICOM image does not contain pixel data."
+                    ) from exc
             shape = (int(metadata.Rows), int(metadata.Columns))
             if shape != reference_shape:
                 raise ValueError("CT DICOM images have inconsistent matrix dimensions.")
@@ -760,7 +1465,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             if not np.allclose(spacing, reference_spacing, rtol=0, atol=1e-5):
                 raise ValueError("CT DICOM images have inconsistent pixel spacing.")
             if not hasattr(metadata, "ImagePositionPatient"):
-                raise ValueError("ImagePositionPatient is required for CT series sorting.")
+                raise ValueError(
+                    "ImagePositionPatient is required for CT series sorting."
+                )
             if len(metadata.ImagePositionPatient) < 3:
                 raise ValueError("ImagePositionPatient must contain three coordinates.")
             z_positions.append(float(metadata.ImagePositionPatient[2]))
@@ -782,14 +1489,19 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             self._slice_spacing_consistent = True
         manufacturer = getattr(metadatas[0], "Manufacturer", None)
         if not manufacturer:
-            warnings.warn("Manufacturer is missing from the CT DICOM metadata.", UserWarning)
+            warnings.warn(
+                "Manufacturer is missing from the CT DICOM metadata.", UserWarning
+            )
         elif "GE" not in str(manufacturer).upper():
             warnings.warn(
                 "Manufacturer is not GE; analysis continued because the phantom was loaded.",
                 UserWarning,
             )
         if not getattr(metadatas[0], "ManufacturerModelName", None):
-            warnings.warn("ManufacturerModelName is missing from the CT DICOM metadata.", UserWarning)
+            warnings.warn(
+                "ManufacturerModelName is missing from the CT DICOM metadata.",
+                UserWarning,
+            )
 
     @staticmethod
     def _pixel_spacing(metadata: pydicom.Dataset) -> tuple[float, float]:
@@ -814,6 +1526,78 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         return self._module_locations
 
     @property
+    def profile_selection(self) -> GECTQAProfileSelection:
+        """Return the resolved profile identity and selection provenance."""
+        return self._profile_selection.model_copy(deep=True)
+
+    @property
+    def scanner_profile(self) -> GECTQAScannerProfile:
+        """Return the resolved scanner profile."""
+        return get_scanner_profile(self._profile_selection.scanner_id)
+
+    @property
+    def phantom_profile(self) -> GECTQAPhantomProfile:
+        """Return the resolved phantom profile."""
+        return get_phantom_profile(self._profile_selection.phantom_id)
+
+    def configuration_fields(self) -> dict[str, dict[str, Any]]:
+        """Return serializable field metadata for a configuration panel.
+
+        The returned mapping keeps current values separate from profile defaults;
+        editing a value therefore does not mutate the registered profile.
+        """
+        default_config = GECTQAConfig.from_profile(
+            self._profile_selection.scanner_id,
+            self._profile_selection.phantom_id,
+        )
+        units = {
+            "expected_diameter_range_mm": "mm",
+            "orientation_default_deg": "degrees",
+            "positioning_tolerance_mm": "mm",
+            "noise_reference_hu": "HU",
+            "noise_tolerance_hu": "HU",
+            "uniformity_reference_hu": "HU",
+            "uniformity_tolerance_hu": "HU",
+            "high_contrast_offset_mm": "mm",
+            "low_contrast_offset_mm": "mm",
+        }
+        names = (
+            "reference_source",
+            "reference_protocol",
+            "expected_diameter_range_mm",
+            "orientation_default_deg",
+            "ct_number_rois",
+            "contrast_scale",
+            "noise_reference_hu",
+            "noise_tolerance_hu",
+            "uniformity_reference_hu",
+            "uniformity_tolerance_hu",
+            "high_contrast_rois",
+            "mtf_method",
+            "mtf_requested_levels",
+            "low_contrast",
+            "slice_thickness",
+            "positioning_tolerance_mm",
+        )
+        fields: dict[str, dict[str, Any]] = {}
+        current_values = self.config.model_dump(mode="json")
+        default_values = default_config.model_dump(mode="json")
+        for name in names:
+            fields[name] = {
+                "current_value": current_values.get(name),
+                "unit": units.get(name),
+                "default_value": default_values.get(name),
+                "source": (
+                    "user_override"
+                    if name in self.config.user_overrides
+                    else "scanner_phantom_profile"
+                ),
+                "is_user_override": name in self.config.user_overrides,
+                "reset_to_default": default_values.get(name),
+            }
+        return fields
+
+    @property
     def pixel_spacing(self) -> tuple[float, float]:
         """Return DICOM row and column spacing in millimetres."""
         return self._pixel_spacing(self.dicom_stack.metadatas[0])
@@ -822,7 +1606,10 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     def z_positions(self) -> np.ndarray:
         """Return sorted slice positions in millimetres."""
         return np.asarray(
-            [float(metadata.ImagePositionPatient[2]) for metadata in self.dicom_stack.metadatas]
+            [
+                float(metadata.ImagePositionPatient[2])
+                for metadata in self.dicom_stack.metadatas
+            ]
         )
 
     @property
@@ -878,13 +1665,145 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             acquisition_time=text("AcquisitionTime"),
         )
 
-    def _phantom_component(self, array: np.ndarray) -> tuple[float, float, float] | None:
+    def _resolve_profiles(
+        self,
+        requested_config: GECTQAConfig | None,
+        *,
+        scanner_profile: str | None,
+        phantom_profile: str | None,
+    ) -> tuple[GECTQAConfig, GECTQAProfileSelection]:
+        """Resolve profile identity and merge profile defaults with user values."""
+        if scanner_profile is not None:
+            selected_scanner = get_scanner_profile(scanner_profile)
+            scanner_source: Literal["dicom", "user", "fallback"] = "user"
+            scanner_warnings: list[str] = []
+        elif (
+            requested_config is not None
+            and requested_config.scanner_profile is not None
+        ):
+            selected_scanner = get_scanner_profile(requested_config.scanner_profile)
+            scanner_source = "user"
+            scanner_warnings = []
+        else:
+            selected_scanner, scanner_warnings = detect_scanner_profile(
+                self._metadata.manufacturer,
+                self._metadata.manufacturer_model_name,
+            )
+            scanner_source = "dicom" if not scanner_warnings else "fallback"
+
+        metadata_values = (
+            self._metadata.protocol_name,
+            self._metadata.series_description,
+            self._metadata.study_description,
+        )
+        if phantom_profile is not None:
+            selected_phantom = get_phantom_profile(phantom_profile)
+            phantom_source: Literal["dicom", "user", "fallback"] = "user"
+            phantom_warnings: list[str] = []
+        elif (
+            requested_config is not None
+            and "phantom_profile" in requested_config.model_fields_set
+            and requested_config.phantom_profile is not None
+        ):
+            selected_phantom = get_phantom_profile(requested_config.phantom_profile)
+            phantom_source = "user"
+            phantom_warnings = []
+        else:
+            selected_phantom, phantom_source, phantom_warnings = detect_phantom_profile(
+                metadata_values, selected_scanner
+            )
+            if phantom_source == "fallback":
+                phantom_warnings = [
+                    "Phantom model was not identified from DICOM; the scanner profile default phantom was applied."
+                ]
+
+        profile_config = GECTQAConfig.from_profile(
+            selected_scanner.scanner_id,
+            selected_phantom.phantom_id,
+        )
+        if requested_config is None:
+            resolved_config = profile_config
+        else:
+            identity_only_fields = {
+                "scanner_profile",
+                "phantom_profile",
+                "user_overrides",
+            }
+            if requested_config.model_fields_set <= identity_only_fields:
+                explicitly_configured = requested_config.model_dump(
+                    mode="python", include=requested_config.model_fields_set
+                )
+            else:
+                explicitly_configured = requested_config.model_dump(mode="python")
+            explicitly_configured.pop("scanner_profile", None)
+            explicitly_configured.pop("phantom_profile", None)
+            merged_config = profile_config.model_dump(mode="python")
+            merged_config.update(explicitly_configured)
+            resolved_config = GECTQAConfig.model_validate(merged_config)
+            resolved_config = resolved_config.model_copy(
+                update={
+                    "scanner_profile": selected_scanner.scanner_id,
+                    "phantom_profile": selected_phantom.phantom_id,
+                    "phantom_model": (
+                        requested_config.phantom_model
+                        if "phantom_model" in requested_config.model_fields_set
+                        else selected_phantom.display_name
+                    ),
+                }
+            )
+        resolved_config = resolved_config.with_user_overrides()
+        all_warnings = [*scanner_warnings, *phantom_warnings]
+        source: Literal["dicom", "user", "fallback", "mixed"]
+        if scanner_source == "user" and phantom_source == "user":
+            source = "user"
+        elif scanner_source == "dicom" and phantom_source == "dicom":
+            source = "dicom"
+        elif scanner_source == "fallback" and phantom_source == "fallback":
+            source = "fallback"
+        else:
+            source = "mixed"
+        reference_scope = "algorithm_default"
+        if any(
+            parameter.reference_scope == "shared_ge_reference"
+            for parameter in resolved_config.reference_parameters.values()
+        ):
+            reference_scope = "shared_ge_reference"
+        selection = GECTQAProfileSelection(
+            scanner_id=selected_scanner.scanner_id,
+            scanner_display_name=selected_scanner.display_name,
+            phantom_id=selected_phantom.phantom_id,
+            phantom_display_name=selected_phantom.display_name,
+            source=source,
+            scanner_source=scanner_source,
+            phantom_source=phantom_source,
+            scanner_model_from_dicom=self._metadata.manufacturer_model_name,
+            reference_source=resolved_config.reference_source,
+            reference_scope=reference_scope,
+            validation_status=(
+                f"scanner={selected_scanner.validation_status}; "
+                f"phantom={selected_phantom.validation_status}"
+            ),
+            warnings=all_warnings,
+        )
+        for message in all_warnings:
+            warnings.warn(message, UserWarning)
+        return resolved_config, selection
+
+    def _phantom_component(
+        self, array: np.ndarray
+    ) -> tuple[float, float, float] | None:
         row_spacing, column_spacing = self.pixel_spacing
         closing_radius = max(1, int(round(2.0 / min(row_spacing, column_spacing))))
         mask = np.isfinite(array) & (array > self._phantom_threshold_hu)
         mask = ndimage.binary_closing(mask, structure=morphology.disk(closing_radius))
-        mask = morphology.remove_small_objects(mask, max_size=max(25, closing_radius**2))
-        regions = sorted(measure.regionprops(measure.label(mask)), key=lambda region: region.area, reverse=True)
+        mask = morphology.remove_small_objects(
+            mask, max_size=max(25, closing_radius**2)
+        )
+        regions = sorted(
+            measure.regionprops(measure.label(mask)),
+            key=lambda region: region.area,
+            reverse=True,
+        )
         lower_diameter, upper_diameter = self.config.expected_diameter_range_mm
         candidates: list[tuple[measure._regionprops.RegionProperties, float]] = []
         for region in regions:
@@ -923,27 +1842,61 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 "or verify that the phantom is visible in the CT image."
             )
         if center_override is not None:
-            center_x_px, center_y_px = (float(center_override[0]), float(center_override[1]))
-            if not (0 <= center_x_px < self._metadata.columns and 0 <= center_y_px < self._metadata.rows):
+            center_x_px, center_y_px = (
+                float(center_override[0]),
+                float(center_override[1]),
+            )
+            if not (
+                0 <= center_x_px < self._metadata.columns
+                and 0 <= center_y_px < self._metadata.rows
+            ):
                 raise ValueError("center_override must be inside the image matrix.")
             if not self._localization_slice_indices:
                 self._localization_slice_indices = list(range(self.num_images))
-            diameter_mm = float(np.median([item[2] for item in observations])) if observations else float(np.mean(self.config.expected_diameter_range_mm))
+            diameter_mm = (
+                float(np.median([item[2] for item in observations]))
+                if observations
+                else float(np.mean(self.config.expected_diameter_range_mm))
+            )
             confidence = 1.0
         else:
             center_x_px = float(np.median([item[0] for item in observations]))
             center_y_px = float(np.median([item[1] for item in observations]))
             diameter_mm = float(np.median([item[2] for item in observations]))
             confidence = min(1.0, len(observations) / max(3, self.num_images))
-        if angle_override is None:
-            warnings.warn(
-                "Phantom rotation was not determined from the circular boundary; using 0 degrees. "
-                "Supply angle_override or a validated orientation definition when needed.",
-                UserWarning,
-            )
-            angle = 0.0
-        else:
+        detected_orientation = self._detect_orientation()
+        detected_angle = (
+            detected_orientation[0] if detected_orientation is not None else None
+        )
+        orientation_confidence = (
+            detected_orientation[1] if detected_orientation is not None else None
+        )
+        orientation_source: Literal[
+            "automatic", "manual_override", "phantom_profile_default", "unavailable"
+        ]
+        if angle_override is not None:
+            if not self.config.orientation_override_allowed:
+                raise ValueError(
+                    "The selected phantom profile does not allow orientation overrides."
+                )
             angle = float(angle_override)
+            orientation_source = "manual_override"
+            orientation_confidence = 1.0
+        elif detected_angle is not None:
+            angle = detected_angle
+            orientation_source = "automatic"
+            orientation_confidence = confidence
+        elif (
+            self.config.orientation_default_validated
+            and self.config.orientation_default_deg is not None
+        ):
+            angle = float(self.config.orientation_default_deg)
+            orientation_source = "phantom_profile_default"
+            orientation_confidence = 0.2
+        else:
+            raise ValueError(
+                "Phantom orientation is unavailable. Supply angle_override or a phantom profile with a validated orientation default."
+            )
         image_center_x = (self._metadata.columns - 1) / 2
         image_center_y = (self._metadata.rows - 1) / 2
         row_spacing, column_spacing = self.pixel_spacing
@@ -956,7 +1909,25 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             phantom_diameter_mm=diameter_mm,
             phantom_rotation_deg=angle,
             localization_confidence=confidence,
+            orientation_detected=detected_angle is not None,
+            orientation_source=orientation_source,
+            orientation_confidence=orientation_confidence,
+            orientation_default_deg=self.config.orientation_default_deg,
+            orientation_override_deg=(
+                float(angle_override) if angle_override is not None else None
+            ),
         )
+
+    def _detect_orientation(self) -> tuple[float, float] | None:
+        """Attempt configured automatic orientation detection.
+
+        A circular outer boundary has no directional feature, so this method
+        intentionally returns no result until a phantom profile supplies a
+        directional marker algorithm.
+        """
+        if self.config.orientation_detection_method != "automatic":
+            return None
+        return None
 
     def _image_array(self, slice_index: int) -> np.ndarray:
         """Return one stack image as a floating-point HU array."""
@@ -1014,9 +1985,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             "std": float(np.std(values)),
             "min": float(np.min(values)),
             "max": float(np.max(values)),
-            "high_cell_count": float(
-                np.sum(values > np.median(values) + 15)
-            ),
+            "high_cell_count": float(np.sum(values > np.median(values) + 15)),
         }
 
     def _low_contrast_target_definitions(
@@ -1024,16 +1993,12 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     ) -> list[tuple[str, GECTQALowContrastTarget]]:
         """Find compact circular contrast candidates in the selected slice."""
         array = self._image_array(slice_index)
-        enhanced = ndimage.gaussian_filter(array, 1) - ndimage.gaussian_filter(
-            array, 6
-        )
+        enhanced = ndimage.gaussian_filter(array, 1) - ndimage.gaussian_filter(array, 6)
         row_spacing, column_spacing = self.pixel_spacing
         yy, xx = np.indices(array.shape)
-        central_mask = (
-            (xx - self._current_localization.phantom_center_x_px) ** 2
-            + (yy - self._current_localization.phantom_center_y_px) ** 2
-            < (70 / np.mean(self.pixel_spacing)) ** 2
-        )
+        central_mask = (xx - self._current_localization.phantom_center_x_px) ** 2 + (
+            yy - self._current_localization.phantom_center_y_px
+        ) ** 2 < (70 / np.mean(self.pixel_spacing)) ** 2
         threshold = max(5.0, float(np.percentile(enhanced[central_mask], 95)))
         regions = measure.regionprops(
             measure.label((enhanced > threshold) & central_mask)
@@ -1057,7 +2022,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                         y_mm=(center_y - self._current_localization.phantom_center_y_px)
                         * row_spacing,
                         radius_mm=float(radius_px * np.mean(self.pixel_spacing)),
-                        target_size_mm=float(2 * radius_px * np.mean(self.pixel_spacing)),
+                        target_size_mm=float(
+                            2 * radius_px * np.mean(self.pixel_spacing)
+                        ),
                     ),
                 )
             )
@@ -1088,7 +2055,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         candidate_indices = self._localization_slice_indices or list(
             range(self.num_images)
         )
-        high_definitions = self.config.high_contrast_rois or self._default_high_contrast_rois()
+        high_definitions = (
+            self.config.high_contrast_rois or self._default_high_contrast_rois()
+        )
         first_definition = high_definitions.get("1.6mm") or next(
             iter(high_definitions.values())
         )
@@ -1099,7 +2068,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             try:
                 array = self._image_array(slice_index)
                 first_roi = self._create_roi(array, first_definition)
-                section1_scores[slice_index] = float(np.std(self._roi_pixels(first_roi)))
+                section1_scores[slice_index] = float(
+                    np.std(self._roi_pixels(first_roi))
+                )
                 grid = self._grid_statistics(slice_index)
                 water_reference = (
                     self.config.uniformity_reference_hu
@@ -1107,17 +2078,18 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     else 0.0
                 )
                 uniformity_scores[slice_index] = float(
-                    abs(float(grid["mean"]) - water_reference)
-                    + float(grid["std"])
+                    abs(float(grid["mean"]) - water_reference) + float(grid["std"])
                 )
                 enhanced = ndimage.gaussian_filter(array, 1) - ndimage.gaussian_filter(
                     array, 6
                 )
                 central_mask = (
-                    (np.indices(array.shape)[1] - self._current_localization.phantom_center_x_px) ** 2
-                    + (np.indices(array.shape)[0] - self._current_localization.phantom_center_y_px) ** 2
-                    < (70 / np.mean(self.pixel_spacing)) ** 2
-                )
+                    np.indices(array.shape)[1]
+                    - self._current_localization.phantom_center_x_px
+                ) ** 2 + (
+                    np.indices(array.shape)[0]
+                    - self._current_localization.phantom_center_y_px
+                ) ** 2 < (70 / np.mean(self.pixel_spacing)) ** 2
                 threshold = max(
                     5.0,
                     float(np.percentile(enhanced[central_mask], 95)),
@@ -1142,9 +2114,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
 
         section1_slice = max(section1_scores, key=section1_scores.get)
         uniformity_candidates = [
-            index
-            for index in candidate_indices
-            if abs(index - section1_slice) > 5
+            index for index in candidate_indices if abs(index - section1_slice) > 5
         ] or candidate_indices
         uniformity_slice = min(
             uniformity_candidates,
@@ -1182,13 +2152,20 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             if not 0 <= requested < self.num_images:
                 raise ValueError("origin_slice is outside the loaded CT series.")
             return int(requested)
-        if self.config.automatic_module_detection and self._module_locations is not None:
+        if (
+            self.config.automatic_module_detection
+            and self._module_locations is not None
+        ):
             return self._module_locations.section1_slice_index
         if self.num_images == 1:
             return 0
-        return self._localization_slice_indices[len(self._localization_slice_indices) // 2]
+        return self._localization_slice_indices[
+            len(self._localization_slice_indices) // 2
+        ]
 
-    def _module_slice(self, offset_mm: float, module_name: str | None = None) -> int | None:
+    def _module_slice(
+        self, offset_mm: float, module_name: str | None = None
+    ) -> int | None:
         if (
             self.config.automatic_module_detection
             and self._module_locations is not None
@@ -1224,7 +2201,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             width=definition.width_mm / column_spacing,
             height=definition.height_mm / row_spacing,
             center=center,
-            rotation=definition.rotation_deg + self._current_localization.phantom_rotation_deg,
+            rotation=definition.rotation_deg
+            + self._current_localization.phantom_rotation_deg,
         )
 
     @staticmethod
@@ -1295,6 +2273,16 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         known_values = [value for value in passes if value is not None]
         return all(known_values) if known_values else None
 
+    def _reference_number(self, name: str, configured: float | None) -> float | None:
+        """Resolve a numeric reference parameter before a legacy config value."""
+        parameter = self.config.reference_parameters.get(name)
+        if parameter is not None and parameter.value is not None:
+            try:
+                return float(parameter.value)
+            except (TypeError, ValueError):
+                return configured
+        return configured
+
     def _unavailable(self, result_type, reason: str, **values):
         return result_type(available=False, passed=None, reason=reason, **values)
 
@@ -1319,31 +2307,49 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 )
             except ValueError as exc:
                 return self._unavailable(GECTQACTNumberResult, str(exc))
+            nominal_hu = definition.nominal_hu
+            tolerance_hu = definition.tolerance_hu
+            if name.lower() == "water":
+                nominal_hu = self._reference_number("water_nominal_hu", nominal_hu)
+                tolerance_hu = self._reference_number(
+                    "water_tolerance_hu", tolerance_hu
+                )
             difference = (
-                base_result.mean_hu - definition.nominal_hu
-                if definition.nominal_hu is not None
-                else None
+                base_result.mean_hu - nominal_hu if nominal_hu is not None else None
             )
             percent_error = None
-            if difference is not None and definition.nominal_hu not in (None, 0):
-                percent_error = abs(difference / definition.nominal_hu) * 100
+            if difference is not None and nominal_hu not in (None, 0):
+                percent_error = abs(difference / nominal_hu) * 100
             passed = (
-                abs(difference) <= definition.tolerance_hu
-                if difference is not None and definition.tolerance_hu is not None
+                abs(difference) <= tolerance_hu
+                if difference is not None and tolerance_hu is not None
                 else None
             )
             roi_results[name] = GECTQAMaterialResult(
                 **base_result.model_dump(),
-                nominal_hu=definition.nominal_hu,
+                nominal_hu=nominal_hu,
                 difference_hu=difference,
                 percent_error=percent_error,
-                tolerance_hu=definition.tolerance_hu,
+                tolerance_hu=tolerance_hu,
                 passed=passed,
             )
+        missing_references = [
+            name
+            for name, result in roi_results.items()
+            if result.nominal_hu is None or result.tolerance_hu is None
+        ]
         return GECTQACTNumberResult(
             available=True,
-            passed=self._combine_passes([result.passed for result in roi_results.values()]),
+            passed=self._combine_passes(
+                [result.passed for result in roi_results.values()]
+            ),
             rois=roi_results,
+            reason=(
+                "Missing nominal value or tolerance for: "
+                + ", ".join(missing_references)
+                if missing_references
+                else None
+            ),
         )
 
     def _analyze_contrast_scale(
@@ -1369,14 +2375,20 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 f"Contrast-scale reference ROI is missing: {exc.args[0]}.",
             )
         contrast_scale = first_value - second_value
+        nominal_difference = self._reference_number(
+            "plexiglass_water_difference_hu", definition.nominal_difference_hu
+        )
+        contrast_tolerance = self._reference_number(
+            "plexiglass_water_tolerance_hu", definition.tolerance_hu
+        )
         deviation = (
-            contrast_scale - definition.nominal_difference_hu
-            if definition.nominal_difference_hu is not None
+            contrast_scale - nominal_difference
+            if nominal_difference is not None
             else None
         )
         passed = (
-            abs(deviation) <= definition.tolerance_hu
-            if deviation is not None and definition.tolerance_hu is not None
+            abs(deviation) <= contrast_tolerance
+            if deviation is not None and contrast_tolerance is not None
             else None
         )
         return GECTQAContrastScaleResult(
@@ -1390,9 +2402,14 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             },
             contrast_scale=contrast_scale,
             contrast_scale_units=definition.units,
-            nominal_difference_hu=definition.nominal_difference_hu,
+            nominal_difference_hu=nominal_difference,
             deviation_hu=deviation,
-            tolerance_hu=definition.tolerance_hu,
+            tolerance_hu=contrast_tolerance,
+            reason=(
+                "No validated contrast-scale nominal value and tolerance were configured."
+                if nominal_difference is None or contrast_tolerance is None
+                else None
+            ),
         )
 
     def _analyze_noise(self) -> GECTQANoiseResult:
@@ -1414,27 +2431,42 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             )
         except ValueError as exc:
             return self._unavailable(GECTQANoiseResult, str(exc))
-        if self.config.noise_tolerance_hu is None:
+        noise_reference = self._reference_number(
+            "noise_nominal_hu", self.config.noise_reference_hu
+        )
+        noise_tolerance = self._reference_number(
+            "noise_tolerance_hu", self.config.noise_tolerance_hu
+        )
+        if noise_reference is None or noise_tolerance is None:
             passed = None
-        elif self.config.noise_reference_hu is None:
-            passed = roi_result.std_hu <= self.config.noise_tolerance_hu
         else:
-            passed = (
-                abs(roi_result.std_hu - self.config.noise_reference_hu)
-                <= self.config.noise_tolerance_hu
-            )
+            passed = abs(roi_result.std_hu - noise_reference) <= noise_tolerance
         return GECTQANoiseResult(
             available=True,
             passed=passed,
             roi=roi_result,
             noise_hu=roi_result.std_hu,
-            reference_hu=self.config.noise_reference_hu,
+            reference_hu=noise_reference,
             difference_hu=(
-                roi_result.std_hu - self.config.noise_reference_hu
-                if self.config.noise_reference_hu is not None
+                roi_result.std_hu - noise_reference
+                if noise_reference is not None
                 else None
             ),
-            tolerance_hu=self.config.noise_tolerance_hu,
+            tolerance_hu=noise_tolerance,
+            measured_value=roi_result.std_hu,
+            nominal_value=noise_reference,
+            tolerance=noise_tolerance,
+            difference=(
+                roi_result.std_hu - noise_reference
+                if noise_reference is not None
+                else None
+            ),
+            unit="HU",
+            reason=(
+                "Missing validated noise nominal value or tolerance."
+                if noise_reference is None or noise_tolerance is None
+                else None
+            ),
         )
 
     def _analyze_uniformity(self) -> GECTQAUniformityResult:
@@ -1470,17 +2502,22 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             for name, result in roi_results.items()
             if name != self.config.uniformity_center_name
         ]
-        max_deviation = max((abs(value - center_value) for value in peripheral), default=0.0)
+        max_deviation = max(
+            (abs(value - center_value) for value in peripheral), default=0.0
+        )
         max_pairwise = max(means) - min(means)
-        if self.config.uniformity_tolerance_hu is None:
+        uniformity_reference = self._reference_number(
+            "uniformity_difference_nominal_hu", self.config.uniformity_reference_hu
+        )
+        uniformity_tolerance = self._reference_number(
+            "uniformity_difference_tolerance_hu", self.config.uniformity_tolerance_hu
+        )
+        if uniformity_tolerance is None:
             passed = None
-        elif self.config.uniformity_reference_hu is None:
-            passed = max_deviation <= self.config.uniformity_tolerance_hu
+        elif uniformity_reference is None:
+            passed = max_deviation <= uniformity_tolerance
         else:
-            passed = (
-                abs(max_deviation - self.config.uniformity_reference_hu)
-                <= self.config.uniformity_tolerance_hu
-            )
+            passed = abs(max_deviation - uniformity_reference) <= uniformity_tolerance
         return GECTQAUniformityResult(
             available=True,
             passed=passed,
@@ -1488,8 +2525,22 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             center_roi_name=self.config.uniformity_center_name,
             max_deviation_from_center_hu=max_deviation,
             max_pairwise_difference_hu=max_pairwise,
-            reference_difference_hu=self.config.uniformity_reference_hu,
-            tolerance_hu=self.config.uniformity_tolerance_hu,
+            reference_difference_hu=uniformity_reference,
+            tolerance_hu=uniformity_tolerance,
+            measured_value=max_deviation,
+            nominal_value=uniformity_reference,
+            tolerance=uniformity_tolerance,
+            difference=(
+                max_deviation - uniformity_reference
+                if uniformity_reference is not None
+                else None
+            ),
+            unit="HU",
+            reason=(
+                "No uniformity tolerance was configured."
+                if uniformity_tolerance is None
+                else None
+            ),
         )
 
     def _analyze_high_contrast(self) -> GECTQAHighContrastResult:
@@ -1512,16 +2563,27 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     "High contrast",
                 )
                 threshold = definition.visibility_threshold_hu
-                resolved = base_result.std_hu >= threshold if threshold is not None else None
+                resolved = (
+                    base_result.std_hu >= threshold if threshold is not None else None
+                )
+                reference_std = definition.reference_std_hu
+                reference_tolerance = definition.tolerance_hu
+                if name == "1.6mm":
+                    reference_std = self._reference_number(
+                        "high_contrast_1_6mm_std_hu", reference_std
+                    )
+                    reference_tolerance = self._reference_number(
+                        "high_contrast_1_6mm_tolerance_hu", reference_tolerance
+                    )
                 reference_difference = (
-                    base_result.std_hu - definition.reference_std_hu
-                    if definition.reference_std_hu is not None
+                    base_result.std_hu - reference_std
+                    if reference_std is not None
                     else None
                 )
                 reference_passed = (
-                    abs(reference_difference) <= definition.tolerance_hu
+                    abs(reference_difference) <= reference_tolerance
                     if reference_difference is not None
-                    and definition.tolerance_hu is not None
+                    and reference_tolerance is not None
                     else None
                 )
                 roi_results[name] = GECTQAHighContrastROIResult(
@@ -1530,44 +2592,118 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     visibility_score_hu=base_result.std_hu,
                     visibility_threshold_hu=threshold,
                     resolved=resolved,
-                    reference_std_hu=definition.reference_std_hu,
+                    reference_std_hu=reference_std,
                     difference_hu=reference_difference,
-                    tolerance_hu=definition.tolerance_hu,
+                    tolerance_hu=reference_tolerance,
                     passed=reference_passed,
                 )
         except ValueError as exc:
             return self._unavailable(GECTQAHighContrastResult, str(exc))
         resolved_rois = [result for result in roi_results.values() if result.resolved]
-        best = max(resolved_rois, key=lambda result: result.spatial_frequency_lp_mm, default=None)
+        best = max(
+            resolved_rois,
+            key=lambda result: result.spatial_frequency_lp_mm,
+            default=None,
+        )
         resolution = best.spatial_frequency_lp_mm if best is not None else None
         mtf_values: dict[str, float] | None = None
+        mtf_results: dict[str, GECTQAMTFResult] = {}
         mtf_50 = None
         try:
             ordered_names = list(self.config.high_contrast_rois)
             ordered_rois = [
-                self._create_roi(self._image_array(slice_index), self.config.high_contrast_rois[name])
+                self._create_roi(
+                    self._image_array(slice_index), self.config.high_contrast_rois[name]
+                )
                 for name in ordered_names
             ]
             spacings = [
                 self.config.high_contrast_rois[name].spatial_frequency_lp_mm
                 for name in ordered_names
             ]
-            mtf = MTF.from_high_contrast_diskset(
-                spacings=spacings,
-                diskset=ordered_rois,
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mtf = MTF.from_high_contrast_diskset(
+                    spacings=spacings,
+                    diskset=ordered_rois,
+                )
+            mtf_values = {}
+            normalized_values = np.asarray(list(mtf.norm_mtfs.values()), dtype=float)
+            lower_mtf = float(np.min(normalized_values))
+            upper_mtf = float(np.max(normalized_values))
+            for percentage in self.config.mtf_requested_levels:
+                requested_value = percentage / 100
+                direct = bool(
+                    np.any(
+                        np.isclose(
+                            normalized_values, requested_value, rtol=0, atol=1e-6
+                        )
+                    )
+                )
+                inside_range = lower_mtf <= requested_value <= upper_mtf
+                extrapolated = not inside_range
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    value = float(mtf.relative_resolution(percentage))
+                if not np.isfinite(value):
+                    mtf_results[str(percentage)] = GECTQAMTFResult(
+                        requested_mtf_percent=percentage,
+                        measured_directly=False,
+                        interpolated=False,
+                        extrapolated=False,
+                        value=None,
+                        status="UNAVAILABLE",
+                        validity="UNAVAILABLE",
+                        reason="MTF interpolation produced a non-finite value.",
+                    )
+                    continue
+                validity: GECTQAStatus
+                if extrapolated:
+                    validity = "EXTRAPOLATED"
+                elif direct:
+                    validity = "PASS"
+                else:
+                    validity = "NOT_EVALUATED"
+                mtf_results[str(percentage)] = GECTQAMTFResult(
+                    requested_mtf_percent=percentage,
+                    measured_directly=direct,
+                    interpolated=inside_range and not direct,
+                    extrapolated=extrapolated,
+                    value=value,
+                    status=validity,
+                    validity=validity,
+                    reason=(
+                        "Requested MTF level lies outside measured relative-MTF range."
+                        if extrapolated
+                        else None
+                    ),
+                )
+                mtf_values[str(percentage)] = value
+            mtf_50 = (
+                mtf_results.get("50").value
+                if mtf_results.get("50") is not None
+                else None
             )
-            mtf_values = {
-                str(percentage): float(mtf.relative_resolution(percentage))
-                for percentage in range(10, 100, 10)
-            }
-            mtf_50 = mtf_values["50"]
             if resolution is None:
                 resolution = mtf_50
         except (IndexError, KeyError, ValueError, TypeError):
-            pass
+            mtf_values = None
+            for percentage in self.config.mtf_requested_levels:
+                mtf_results.setdefault(
+                    str(percentage),
+                    GECTQAMTFResult(
+                        requested_mtf_percent=percentage,
+                        measured_directly=False,
+                        value=None,
+                        status="UNAVAILABLE",
+                        validity="UNAVAILABLE",
+                        reason="MTF could not be calculated from the configured high-contrast ROIs.",
+                    ),
+                )
         passed = (
             resolution >= self.config.minimum_resolution_lp_mm
-            if resolution is not None and self.config.minimum_resolution_lp_mm is not None
+            if resolution is not None
+            and self.config.minimum_resolution_lp_mm is not None
             else self._combine_known_passes(
                 [result.passed for result in roi_results.values()]
             )
@@ -1589,8 +2725,21 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             resolution_lp_mm=resolution,
             resolution_lp_cm=resolution * 10 if resolution is not None else None,
             mtf=mtf_values,
+            mtf_results=mtf_results,
             measured_bar_sizes_mm=measured_bar_sizes,
             unmeasured_bar_sizes_mm=unmeasured_bar_sizes,
+            measured_value=resolution,
+            unit="lp/mm",
+            reason=(
+                "No validated high-contrast reference or minimum resolution criterion was configured."
+                if passed is None
+                else None
+            ),
+            parameters_used={
+                "bar_sizes_mm": measured_bar_sizes,
+                "mtf_method": self.config.mtf_method,
+                "mtf_requested_levels": list(self.config.mtf_requested_levels),
+            },
         )
 
     def _analyze_low_contrast(self) -> GECTQALowContrastResult:
@@ -1604,13 +2753,6 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             self.config.low_contrast_offset_mm, module_name="low_contrast"
         )
         grid = self._grid_statistics(slice_index)
-        auto_target_definitions = []
-        if not definition.targets:
-            auto_target_definitions = self._low_contrast_target_definitions(slice_index)
-            if auto_target_definitions:
-                definition = definition.model_copy(
-                    update={"targets": dict(auto_target_definitions)}
-                )
         if not definition.targets:
             return GECTQALowContrastResult(
                 available=True,
@@ -1628,6 +2770,12 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 grid_std_hu=float(grid["std"]),
                 grid_min_hu=float(grid["min"]),
                 grid_max_hu=float(grid["max"]),
+                parameters_used={
+                    "target_geometry": definition.target_geometry,
+                    "target_contrast_hu": definition.target_contrast_hu,
+                    "cnr_threshold": definition.cnr_threshold,
+                    "visual_observer_required": definition.visual_observer_required,
+                },
             )
         try:
             background_result, _ = self._roi_result(
@@ -1652,7 +2800,13 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 contrast = abs(target.mean_hu - background_mean)
                 denominator = np.sqrt((target.std_hu**2 + background_std**2) / 2)
                 cnr = float(contrast / denominator) if denominator > 0 else None
-                visible = cnr >= definition.cnr_threshold if cnr is not None and definition.cnr_threshold is not None else None
+                visible = (
+                    cnr >= definition.cnr_threshold
+                    if cnr is not None
+                    and definition.cnr_threshold is not None
+                    and not definition.visual_observer_required
+                    else None
+                )
                 roi_results[name] = GECTQALowContrastROIResult(
                     **target.model_dump(),
                     target_size_mm=target_definition.target_size_mm,
@@ -1670,14 +2824,19 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         visible_values = [
             result.cnr
             for result in roi_results.values()
-            if result.cnr is not None and definition.cnr_threshold is not None and result.cnr >= definition.cnr_threshold
+            if result.cnr is not None
+            and definition.cnr_threshold is not None
+            and not definition.visual_observer_required
+            and result.cnr >= definition.cnr_threshold
         ]
         cnrs = [result.cnr for result in roi_results.values() if result.cnr is not None]
         visible_count = len(visible_values)
+        best_cnr = max(cnrs) if cnrs else None
         passed = None
         if (
             definition.minimum_visible_targets is not None
             and definition.cnr_threshold is not None
+            and not definition.visual_observer_required
         ):
             passed = visible_count >= definition.minimum_visible_targets
         contrasts = [result.contrast_hu for result in roi_results.values()]
@@ -1690,7 +2849,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             num_rois_detected=len(roi_results),
             num_rois_visible=visible_count,
             minimum_visible_contrast_hu=min(contrasts) if contrasts else None,
-            best_cnr=max(cnrs) if cnrs else None,
+            best_cnr=best_cnr,
             worst_cnr=min(cnrs) if cnrs else None,
             grid_cell_size_mm=5.0,
             grid_num_cells=15,
@@ -1699,16 +2858,38 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             grid_min_hu=float(grid["min"]),
             grid_max_hu=float(grid["max"]),
             method=(
-                "automatic circular target candidates + CNR estimate; visual "
-                "observer score not inferred"
-                if auto_target_definitions
+                "configured target/background CNR; visual observer score not inferred"
+                if definition.visual_observer_required
                 else "configured target/background CNR"
             ),
+            measured_value=best_cnr,
+            unit="CNR",
+            reason=(
+                "No validated automated CNR threshold was configured."
+                if definition.cnr_threshold is None
+                else (
+                    "Visual-observer scoring is required; CNR is reported separately."
+                    if definition.visual_observer_required
+                    else None
+                )
+            ),
+            parameters_used={
+                "target_geometry": definition.target_geometry,
+                "target_contrast_hu": definition.target_contrast_hu,
+                "cnr_threshold": definition.cnr_threshold,
+                "visual_observer_required": definition.visual_observer_required,
+            },
         )
 
     def _analyze_slice_thickness(self) -> GECTQASliceThicknessResult:
         definition = self.config.slice_thickness
         if definition is None:
+            return self._unavailable(
+                GECTQASliceThicknessResult,
+                "Required GE slice-thickness insert geometry and calibration were not supplied.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
+            )
+        if definition.insert_geometry is None or definition.profile_calibration is None:
             return self._unavailable(
                 GECTQASliceThicknessResult,
                 "Required GE slice-thickness insert geometry and calibration were not supplied.",
@@ -1784,9 +2965,21 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             half_level,
         )
         measured = abs(right_position - left_position) * definition.correction_factor
-        difference = measured - definition.nominal_mm if definition.nominal_mm is not None else None
-        percent_difference = abs(difference / definition.nominal_mm) * 100 if difference is not None and definition.nominal_mm not in (None, 0) else None
-        passed = abs(difference) <= definition.tolerance_mm if difference is not None and definition.tolerance_mm is not None else None
+        difference = (
+            measured - definition.nominal_mm
+            if definition.nominal_mm is not None
+            else None
+        )
+        percent_difference = (
+            abs(difference / definition.nominal_mm) * 100
+            if difference is not None and definition.nominal_mm not in (None, 0)
+            else None
+        )
+        passed = (
+            abs(difference) <= definition.tolerance_mm
+            if difference is not None and definition.tolerance_mm is not None
+            else None
+        )
         selected_peak_z = float(profile_z[peak_index])
         selected_peak_index = int(np.argmin(np.abs(self.z_positions - selected_peak_z)))
         return GECTQASliceThicknessResult(
@@ -1819,7 +3012,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         return first_z + fraction * (second_z - first_z)
 
     def _analyze_positioning(self) -> GECTQAPositioningResult:
-        tolerance = self.config.positioning_tolerance_mm
+        tolerance = self._reference_number(
+            "positioning_tolerance_mm", self.config.positioning_tolerance_mm
+        )
         offset_x = self._current_localization.phantom_center_x_mm
         offset_y = self._current_localization.phantom_center_y_mm
         passed = (
@@ -1834,6 +3029,26 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             offset_y_mm=offset_y,
             rotation_deg=self._current_localization.phantom_rotation_deg,
             tolerance_mm=tolerance,
+            excess_mm=(
+                max(0.0, max(abs(offset_x), abs(offset_y)) - tolerance)
+                if tolerance is not None
+                else None
+            ),
+            measured_value=max(abs(offset_x), abs(offset_y)),
+            nominal_value=0.0,
+            tolerance=tolerance,
+            difference=(
+                max(abs(offset_x), abs(offset_y)) - tolerance
+                if tolerance is not None
+                else None
+            ),
+            unit="mm",
+            confidence=self._current_localization.localization_confidence,
+            reason=(
+                "No positioning tolerance was configured."
+                if tolerance is None
+                else None
+            ),
         )
 
     def _reference_result(self) -> GECTQAReference:
@@ -1841,71 +3056,87 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         water = self.config.ct_number_rois.get("Water")
         first_high = self.config.high_contrast_rois.get("1.6mm")
         scanner_model = self._metadata.manufacturer_model_name or "unknown model"
-        if "OPTIMA" in scanner_model.upper():
-            scanner_reference_status = (
-                f"DICOM model is {scanner_model}; GE phantom references are applied, "
-                "with local Optima protocol validation still required."
+        if self._profile_selection.scanner_source == "user":
+            identity_status = (
+                f"Scanner profile {self._profile_selection.scanner_display_name} "
+                f"was user-selected; DICOM model is {scanner_model}."
+            )
+        elif self._profile_selection.scanner_source == "fallback":
+            identity_status = (
+                "Unknown scanner model — generic GE defaults applied; "
+                f"DICOM model is {scanner_model}, not explicitly Optima or Helios."
             )
         else:
-            scanner_reference_status = (
-                f"DICOM model is {scanner_model}, not explicitly Optima; GE phantom "
-                "references are applied without inventing model-specific calibration."
+            identity_status = (
+                f"Scanner profile {self._profile_selection.scanner_display_name} "
+                f"was selected from DICOM model {scanner_model}."
             )
+        if self._profile_selection.reference_scope == "shared_ge_reference":
+            identity_status += " Reference scope: Shared GE reference."
+
+        def parameter_value(name: str, configured: float | None) -> float | None:
+            parameter = self.config.reference_parameters.get(name)
+            if parameter is not None and parameter.value is not None:
+                return float(parameter.value)
+            return configured
+
+        parameters = {
+            name: parameter.model_copy(deep=True)
+            for name, parameter in self.config.reference_parameters.items()
+        }
         return GECTQAReference(
-            source=self.config.reference_source or "local configuration",
+            source=self.config.reference_source,
             section1_scan_location_mm=self.config.section1_location_mm,
             section3_scan_location_mm=self.config.section3_location_mm,
-            water_nominal_hu=water.nominal_hu if water and water.nominal_hu is not None else 0.0,
-            water_tolerance_hu=water.tolerance_hu if water and water.tolerance_hu is not None else 3.0,
-            plexiglass_water_difference_hu=(
+            water_nominal_hu=parameter_value(
+                "water_nominal_hu", water.nominal_hu if water else None
+            ),
+            water_tolerance_hu=parameter_value(
+                "water_tolerance_hu", water.tolerance_hu if water else None
+            ),
+            plexiglass_water_difference_hu=parameter_value(
+                "plexiglass_water_difference_hu",
                 self.config.contrast_scale.nominal_difference_hu
                 if self.config.contrast_scale
-                and self.config.contrast_scale.nominal_difference_hu is not None
-                else 120.0
+                else None,
             ),
-            plexiglass_water_tolerance_hu=(
+            plexiglass_water_tolerance_hu=parameter_value(
+                "plexiglass_water_tolerance_hu",
                 self.config.contrast_scale.tolerance_hu
                 if self.config.contrast_scale
-                and self.config.contrast_scale.tolerance_hu is not None
-                else 12.0
+                else None,
             ),
-            noise_nominal_hu=(
-                self.config.noise_reference_hu
-                if self.config.noise_reference_hu is not None
-                else 3.2
+            noise_nominal_hu=parameter_value(
+                "noise_nominal_hu", self.config.noise_reference_hu
             ),
-            noise_tolerance_hu=(
-                self.config.noise_tolerance_hu
-                if self.config.noise_tolerance_hu is not None
-                else 0.3
+            noise_tolerance_hu=parameter_value(
+                "noise_tolerance_hu", self.config.noise_tolerance_hu
             ),
-            uniformity_difference_nominal_hu=(
-                self.config.uniformity_reference_hu
-                if self.config.uniformity_reference_hu is not None
-                else 0.0
+            uniformity_difference_nominal_hu=parameter_value(
+                "uniformity_difference_nominal_hu", self.config.uniformity_reference_hu
             ),
-            uniformity_difference_tolerance_hu=(
-                self.config.uniformity_tolerance_hu
-                if self.config.uniformity_tolerance_hu is not None
-                else 3.0
+            uniformity_difference_tolerance_hu=parameter_value(
+                "uniformity_difference_tolerance_hu",
+                self.config.uniformity_tolerance_hu,
             ),
-            high_contrast_1_6mm_std_hu=(
-                first_high.reference_std_hu
-                if first_high and first_high.reference_std_hu is not None
-                else 37.0
+            high_contrast_1_6mm_std_hu=parameter_value(
+                "high_contrast_1_6mm_std_hu",
+                first_high.reference_std_hu if first_high else None,
             ),
-            high_contrast_1_6mm_tolerance_hu=(
-                first_high.tolerance_hu
-                if first_high and first_high.tolerance_hu is not None
-                else 4.0
+            high_contrast_1_6mm_tolerance_hu=parameter_value(
+                "high_contrast_1_6mm_tolerance_hu",
+                first_high.tolerance_hu if first_high else None,
             ),
             high_contrast_bar_sizes_mm=GE_QA_HIGH_CONTRAST_BAR_SIZES_MM,
-            positioning_tolerance_mm=(
-                self.config.positioning_tolerance_mm
-                if self.config.positioning_tolerance_mm is not None
-                else 2.0
+            positioning_tolerance_mm=parameter_value(
+                "positioning_tolerance_mm", self.config.positioning_tolerance_mm
             ),
-            scanner_reference_status=scanner_reference_status,
+            scanner_reference_status=identity_status,
+            scanner_id=self._profile_selection.scanner_id,
+            phantom_id=self._profile_selection.phantom_id,
+            reference_protocol=self.config.reference_protocol,
+            reference_scope=self._profile_selection.reference_scope,
+            parameters=parameters,
         )
 
     def _analyze_helios_compatibility(self) -> GECTQAHeliosCompatibilityResult:
@@ -1962,19 +3193,26 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 self._create_roi(self._image_array(section1), high_definitions[name])
                 for name in high_settings
             ]
-            mtf = MTF.from_high_contrast_diskset(
-                spacings=[1 / (2 * high_settings[name]["bar_size_mm"]) for name in high_settings],
-                diskset=high_rois,
-            )
-            mtf_values = {
-                str(percentage): float(mtf.relative_resolution(percentage))
-                for percentage in range(10, 100, 10)
-            }
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                mtf = MTF.from_high_contrast_diskset(
+                    spacings=[
+                        1 / (2 * high_settings[name]["bar_size_mm"])
+                        for name in high_settings
+                    ],
+                    diskset=high_rois,
+                )
+                mtf_values = {
+                    str(percentage): float(mtf.relative_resolution(percentage))
+                    for percentage in range(10, 100, 10)
+                }
             high_contrast = GECTQAHeliosHighContrastResult(
                 slice_index=section1,
                 physical_z_mm=float(self.z_positions[section1]),
                 rois=high_results,
-                roi_std_hu={name: result.std_hu for name, result in high_results.items()},
+                roi_std_hu={
+                    name: result.std_hu for name, result in high_results.items()
+                },
                 mtf_lp_mm=mtf_values,
                 mtf_50_lp_mm=mtf_values["50"],
             )
@@ -2108,7 +3346,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             self._module_locations = self._module_locations.model_copy(
                 update={
                     "section1_slice_index": self.origin_slice,
-                    "section1_physical_z_mm": float(self.z_positions[self.origin_slice]),
+                    "section1_physical_z_mm": float(
+                        self.z_positions[self.origin_slice]
+                    ),
                 }
             )
         ct_number = self._analyze_ct_number()
@@ -2138,6 +3378,15 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 ),
             ),
         }
+        for test in self._analysis.values():
+            test.reference_source = self.config.reference_source
+            test.reference_scope = self._profile_selection.reference_scope
+            test.overrides_used = dict(self.config.user_overrides)
+            test.parameters_used = {
+                "scanner_profile": self._profile_selection.scanner_id,
+                "phantom_profile": self._profile_selection.phantom_id,
+                **test.parameters_used,
+            }
         self._analysis_complete = True
 
     def _generate_results_data(self) -> GECTQAResult:
@@ -2147,14 +3396,33 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         available_tests = [test for test in tests if test.available]
         passed_tests = [test for test in available_tests if test.passed is True]
         failed_tests = [test for test in available_tests if test.passed is False]
+        not_evaluated_tests = [test for test in tests if test.status == "NOT_EVALUATED"]
+        unavailable_tests = [test for test in tests if test.status == "UNAVAILABLE"]
+        mtf_results = self._analysis["high_contrast_resolution"].mtf_results
+        extrapolated_count = sum(
+            1 for result in mtf_results.values() if result.extrapolated
+        )
         if failed_tests:
             overall_passed = False
+            overall_status = "FAIL"
+        elif not_evaluated_tests or unavailable_tests:
+            overall_passed = None
+            overall_status = "INCOMPLETE"
+        elif (
+            self._profile_selection.reference_scope == "shared_ge_reference"
+            or "unvalidated" in self._profile_selection.validation_status
+        ):
+            overall_passed = None
+            overall_status = "NOT_VALIDATED"
         elif available_tests and len(passed_tests) == len(available_tests):
             overall_passed = True
+            overall_status = "PASS"
         else:
             overall_passed = None
+            overall_status = "NOT_VALIDATED"
         return GECTQAResult(
             phantom_model=self.config.phantom_model,
+            configuration=self._profile_selection,
             reference=self._reference_result(),
             metadata=self._metadata,
             scanner_model=self._metadata.manufacturer_model_name,
@@ -2174,54 +3442,76 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             helios_compatibility=self._helios_compatibility,
             overall_passed=overall_passed,
             num_tests=len(available_tests),
+            num_assessed=len(passed_tests) + len(failed_tests),
             num_passed=len(passed_tests),
             num_failed=len(failed_tests),
+            num_not_evaluated=len(not_evaluated_tests),
+            num_unavailable=len(unavailable_tests),
+            num_extrapolated=extrapolated_count,
             num_warnings=len(self.get_captured_warnings()),
+            overall_status=overall_status,
         )
 
     def results(self) -> str:
         """Return a concise human-readable report."""
         data = self.results_data()
-        status = (
-            "PASS"
-            if data.overall_passed is True
-            else "FAIL"
-            if data.overall_passed is False
-            else "NOT ASSESSED"
-        )
+        status = data.overall_status
         material_lines = [
             f"  {name}: {result.mean_hu:.2f} HU (nominal={result.nominal_hu}, passed={result.passed})"
             for name, result in data.ct_number.rois.items()
         ]
         high_lines = [
-            f"  {name}: SD={result.std_hu:.2f} HU (reference={result.reference_std_hu}, passed={result.passed})"
+            f"  {name}: SD={result.std_hu:.2f} HU (reference={result.reference_std_hu}, status={result.status})"
             for name, result in data.high_contrast_resolution.rois.items()
+        ]
+        mtf_lines = [
+            f"  MTF {name}%: {result.value:.3f} lp/mm - {result.status.lower()}"
+            if result.value is not None
+            else f"  MTF {name}%: unavailable - {result.status.lower()}"
+            for name, result in data.high_contrast_resolution.mtf_results.items()
         ]
         lines = [
             "GE CT QA Phantom Analysis",
             "-------------------------",
             f"Phantom: {data.phantom_model}",
             f"Scanner: {data.scanner_model or 'unknown'}",
+            f"Selected scanner profile: {data.configuration.scanner_display_name} ({data.configuration.scanner_id})",
+            f"Selected phantom profile: {data.configuration.phantom_display_name} ({data.configuration.phantom_id})",
+            f"Profile selection source: {data.configuration.source}",
             f"Reference applicability: {data.reference.scanner_reference_status}",
-            f"Images: {data.num_images}",
+            f"Reference source: {data.reference.source}",
+            f"Reference scope: {data.reference.reference_scope}",
+            f"User overrides: {self.config.user_overrides or 'none'}",
+            f"Algorithm version: {data.pylinac_version}",
+            "Acquisition identity",
+            f"  Manufacturer: {data.metadata.manufacturer}",
+            f"  Scanner model from DICOM: {data.metadata.manufacturer_model_name}",
+            f"  Study UID: {data.metadata.study_instance_uid}",
+            f"  Series UID: {data.metadata.series_instance_uid}",
+            f"  Number of images: {data.num_images}",
+            f"  Slice thickness: {data.metadata.slice_thickness_mm} mm",
+            f"  Pixel spacing: {data.metadata.pixel_spacing_mm} mm",
+            f"  kVp: {data.metadata.kvp}",
+            f"  Kernel: {data.metadata.convolution_kernel}",
+            f"  Protocol name: {data.metadata.protocol_name}",
             f"Matrix/pixel spacing: {data.metadata.rows} x {data.metadata.columns} / {data.metadata.pixel_spacing_mm} mm",
             f"Acquisition: {data.metadata.kvp} kVp, {data.metadata.tube_current_ma} mA, kernel={data.metadata.convolution_kernel}",
             f"Phantom diameter: {data.localization.phantom_diameter_mm:.1f} mm",
-            f"Phantom rotation: {data.localization.phantom_rotation_deg:.2f} deg",
+            f"Orientation: detected={data.localization.orientation_detected}, default={data.localization.orientation_default_deg} deg, final={data.localization.phantom_rotation_deg:.2f} deg, source={data.localization.orientation_source}, confidence={data.localization.orientation_confidence}",
             f"Module slices: Section 1={data.module_locations.section1_slice_index} (z={data.module_locations.section1_physical_z_mm:.1f}), uniformity={data.module_locations.uniformity_slice_index} (z={data.module_locations.uniformity_physical_z_mm:.1f}), low contrast={data.module_locations.low_contrast_slice_index} (z={data.module_locations.low_contrast_physical_z_mm:.1f})",
             "",
             "CT Number Accuracy",
             *material_lines,
-            f"  Passed: {data.ct_number.passed}",
+            f"  Status: {data.ct_number.status}; reason={data.ct_number.reason}",
             "Contrast Scale",
-            f"  Plexiglass - water: {data.contrast_scale.contrast_scale:.2f} HU (reference={data.reference.plexiglass_water_difference_hu:.1f} +/- {data.reference.plexiglass_water_tolerance_hu:.1f}; passed={data.contrast_scale.passed})"
+            f"  Plexiglass - water: {data.contrast_scale.contrast_scale:.2f} HU (reference={data.reference.plexiglass_water_difference_hu} +/- {data.reference.plexiglass_water_tolerance_hu}; status={data.contrast_scale.status})"
             if data.contrast_scale.contrast_scale is not None
             else "  unavailable",
             "Noise and Uniformity",
-            f"  Noise: {data.noise.noise_hu:.2f} HU (reference={data.reference.noise_nominal_hu:.1f} +/- {data.reference.noise_tolerance_hu:.1f}; passed={data.noise.passed})"
+            f"  Noise: {data.noise.noise_hu:.2f} HU (reference={data.reference.noise_nominal_hu} +/- {data.reference.noise_tolerance_hu}; status={data.noise.status})"
             if data.noise.noise_hu is not None
             else "  unavailable",
-            f"  Uniformity max deviation: {data.uniformity.max_deviation_from_center_hu:.2f} HU (limit={data.reference.uniformity_difference_tolerance_hu:.1f}; passed={data.uniformity.passed})"
+            f"  Uniformity max deviation: {data.uniformity.max_deviation_from_center_hu:.2f} HU (limit={data.reference.uniformity_difference_tolerance_hu}; status={data.uniformity.status})"
             if data.uniformity.max_deviation_from_center_hu is not None
             else "  unavailable",
             "High Contrast Spatial Resolution",
@@ -2231,32 +3521,32 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             and data.high_contrast_resolution.mtf.get("50") is not None
             else "  Relative MTF: unavailable",
             f"  Unmeasured documented bar groups: {data.high_contrast_resolution.unmeasured_bar_sizes_mm}",
-            f"  Reference check passed: {data.high_contrast_resolution.passed}",
+            *mtf_lines,
+            f"  Status: {data.high_contrast_resolution.status}; reason={data.high_contrast_resolution.reason}",
             "Low Contrast Detectability",
             f"  15 x 15 grid: mean={data.low_contrast.grid_mean_hu:.2f} HU, SD={data.low_contrast.grid_std_hu:.2f} HU, range={data.low_contrast.grid_min_hu:.2f} to {data.low_contrast.grid_max_hu:.2f} HU"
             if data.low_contrast.grid_mean_hu is not None
             else "  unavailable",
-            "  Visual observer score: not automated",
+            f"  Status: {data.low_contrast.status}; reason={data.low_contrast.reason}",
             "Slice Thickness",
             f"  DICOM acquired SliceThickness: {data.slice_thickness.acquired_slice_thickness_mm} mm",
             f"  Phantom measurement: {data.slice_thickness.measured_slice_thickness_mm if data.slice_thickness.available else 'not available'}",
+            f"  Status: {data.slice_thickness.status}; reason={data.slice_thickness.reason}",
             "Positioning and Alignment",
-            f"  Image offset: x={data.positioning.offset_x_mm:.2f} mm, y={data.positioning.offset_y_mm:.2f} mm; passed={data.positioning.passed}",
-            f"  External laser/light-field: {data.alignment.reason}",
+            f"  Image offset: x={data.positioning.offset_x_mm:.2f} mm, y={data.positioning.offset_y_mm:.2f} mm; tolerance={data.positioning.tolerance_mm} mm; excess={data.positioning.excess_mm} mm; confidence={data.positioning.confidence}; status={data.positioning.status}",
+            f"  External laser/light-field: status={data.alignment.status}; reason={data.alignment.reason}",
             "Helios-compatible comparison",
             f"  Relative MTF 50%: {data.helios_compatibility.high_contrast.mtf_50_lp_mm:.3f} lp/mm"
-            if data.helios_compatibility
-            and data.helios_compatibility.high_contrast
+            if data.helios_compatibility and data.helios_compatibility.high_contrast
             else "  unavailable",
             f"  Low-contrast grid mean/SD: {data.helios_compatibility.low_contrast.mean:.2f} / {data.helios_compatibility.low_contrast.std:.2f} HU"
-            if data.helios_compatibility
-            and data.helios_compatibility.low_contrast
+            if data.helios_compatibility and data.helios_compatibility.low_contrast
             else "  unavailable",
             f"  Validity: {data.helios_compatibility.validity}"
             if data.helios_compatibility
             else "  unavailable",
             "",
-            f"Tests: {data.num_passed} passed, {data.num_failed} failed, {data.num_tests} assessed; warnings={data.num_warnings}",
+            f"Tests: {data.num_passed} passed, {data.num_failed} failed, {data.num_not_evaluated} not evaluated, {data.num_unavailable} unavailable, {data.num_extrapolated} extrapolated; warnings={data.num_warnings}",
             f"Overall: {status}",
         ]
         return "\n".join(lines)
@@ -2265,7 +3555,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         image_array = np.asarray(self.dicom_stack[slice_index].array)
         axis.imshow(image_array, cmap="gray", vmin=-1000, vmax=1000)
         axis.set_title(f"Axial slice {slice_index}")
-        radius_px = self._current_localization.phantom_radius_mm / np.mean(self.pixel_spacing)
+        radius_px = self._current_localization.phantom_radius_mm / np.mean(
+            self.pixel_spacing
+        )
         boundary = Circle(
             (
                 self._current_localization.phantom_center_x_px,
@@ -2325,7 +3617,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             axis.set_axis_off()
             return
         percentages = [int(value) for value in mtf_values]
-        axis.plot(percentages, [mtf_values[str(value)] for value in percentages], marker="o")
+        axis.plot(
+            percentages, [mtf_values[str(value)] for value in percentages], marker="o"
+        )
         axis.set_title("Relative MTF")
         axis.set_xlabel("MTF (%)")
         axis.set_ylabel("lp/mm")
@@ -2361,7 +3655,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         self._plot_axial(uniformity_axis, self.module_locations.uniformity_slice_index)
         uniformity_axis.set_title("Section 3: noise / uniformity")
         low_contrast, low_contrast_axis = plt.subplots(**plt_kwargs)
-        self._plot_axial(low_contrast_axis, self.module_locations.low_contrast_slice_index)
+        self._plot_axial(
+            low_contrast_axis, self.module_locations.low_contrast_slice_index
+        )
         low_contrast_axis.set_title("Section 3: low contrast")
         side, side_axis = plt.subplots(**plt_kwargs)
         self._plot_side(side_axis)
@@ -2434,7 +3730,11 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         side.update_layout(showlegend=show_legend, title="GE CT QA side view")
         mtf = go.Figure()
         compatibility = self.results_data().helios_compatibility
-        if compatibility and compatibility.high_contrast and compatibility.high_contrast.mtf_lp_mm:
+        if (
+            compatibility
+            and compatibility.high_contrast
+            and compatibility.high_contrast.mtf_lp_mm
+        ):
             values = compatibility.high_contrast.mtf_lp_mm
             mtf.add_scatter(
                 x=[int(value) for value in values],
@@ -2442,7 +3742,12 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 mode="lines+markers",
                 name="Relative MTF",
             )
-        mtf.update_layout(showlegend=show_legend, title="Relative MTF", xaxis_title="MTF (%)", yaxis_title="lp/mm")
+        mtf.update_layout(
+            showlegend=show_legend,
+            title="Relative MTF",
+            xaxis_title="MTF (%)",
+            yaxis_title="lp/mm",
+        )
         figures = {
             "Section 1": section1,
             "Uniformity": uniformity,
