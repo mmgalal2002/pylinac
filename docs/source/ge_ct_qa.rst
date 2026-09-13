@@ -64,13 +64,42 @@ ZIP input is supported with:
 Configuration
 -------------
 
-The no-argument constructor uses ``GECTQAConfig.from_ge_manual()``.  It
-includes the GE manual references for water, Plexiglass-to-water contrast,
-noise, uniformity, the 1.6 mm bar standard-deviation check, the documented bar
-sizes, and the 2 mm positioning reference.  It also includes the existing
-Helios-compatible ROI dimensions.  Section 1 and Section 3 are detected from
-image content; the manual's ``S0`` and ``S60`` labels are retained as
-scan-location metadata rather than treated as universal DICOM z offsets.
+GE QA configuration has separate scanner and phantom registries.  The built-in
+scanner IDs are ``GE_OPTIMA_CT``, ``GE_HELIOS_CT``, ``GE_LIGHTSPEED16``,
+``GENERIC_GE_CT``, and ``CUSTOM``.  The built-in phantom IDs include
+``GE_20CM_QA_PHANTOM``, ``GE_HELIOS_COMPATIBLE_QA_PHANTOM``,
+``GE_OPTIMA_QA_PHANTOM``, and ``CUSTOM_PHANTOM``.
+
+With automatic selection, ``ManufacturerModelName=LightSpeed16`` selects
+``GE_LIGHTSPEED16`` and the GE 20 cm QA phantom.  It does not select Optima or
+Helios because the ROI algorithm is compatible with those workflows.  An
+unknown model selects ``GENERIC_GE_CT`` and reports ``Unknown scanner model -
+generic GE defaults applied.`` as a warning.  A manually supplied Optima or
+Helios profile is recorded as ``source="user"`` in
+``result.configuration``.
+
+The default reference values are shared GE references from the supplied
+technical reference manual, not scanner-specific calibration claims.  Every
+reference parameter carries ``source``, ``source_section``,
+``reference_scope``, validation status, and default/override metadata.  Values
+that are not configured remain ``None`` and produce ``NOT_EVALUATED`` or
+``UNAVAILABLE`` rather than a fabricated acceptance result.
+
+The no-argument constructor resolves the scanner from DICOM and builds the
+corresponding scanner/phantom configuration.  To select a profile explicitly:
+
+.. code-block:: python
+
+  from pylinac import GECTQA
+  from pylinac.ge_ct_qa import GE_OPTIMA_CT
+
+  qa = GECTQA(r"C:/CT/ge_set_1", scanner_profile=GE_OPTIMA_CT)
+  qa.analyze()
+  print(qa.profile_selection.model_dump())
+
+``qa.configuration_fields()`` returns current value, unit, profile default,
+source, override state, and reset-to-default values for a configuration panel.
+It does not mutate the registered profile.
 
 For a local phantom revision or validated worksheet, pass an explicit
 configuration.  ROI coordinates remain phantom-relative physical millimetres,
@@ -132,10 +161,11 @@ and bounding-box aspect ratio.  The result includes center, radius, diameter,
 image-relative millimetres, and confidence.
 
 The circular boundary alone cannot determine a clinically meaningful phantom
-rotation.  The default rotation is therefore zero with an explicit warning;
-provide ``angle_override`` when the GE worksheet or a validated orientation
-marker defines the angle.  If automatic localization is unsuitable, pass
-``center_override=(x_px, y_px)``.
+rotation.  The orientation result therefore records whether the angle was
+automatically detected, manually overridden, or taken from a validated
+phantom-profile default.  A zero-degree default is never used silently, and an
+unvalidated phantom without an angle override is rejected.  If automatic
+localization is unsuitable, pass ``center_override=(x_px, y_px)``.
 
 The automatic module anchors use image-content signatures: the 1.6 mm bar
 standard deviation for Section 1, a low-deviation water grid for
@@ -163,15 +193,18 @@ current measurement paths are:
   reference.
 * **High contrast:** Helios-compatible bar ROIs, the GE ``1.6 mm`` standard
   deviation check (``37 +/- 4 HU``), and relative MTF values at 10% through
-  90%.  The MTF is explicitly labeled relative/Helios-compatible.
+  90%.  Each MTF level records whether it was directly measured, interpolated,
+  extrapolated, or unavailable.  Extrapolated values are labeled as such in
+  reports and JSON.
 * **Low contrast:** a 15 x 15 grid using 5 mm cells, with mean, standard
   deviation, extrema, and per-target CNR when target ROIs are configured.  The
   GE visual observer score is not fabricated from grid statistics.
 * **Slice thickness:** a configured axial profile measured by FWHM, with an
-  explicit calibration factor.  At least three slices are required, and the
-  DICOM ``SliceThickness`` tag is never reported as a phantom measurement.
-* **Positioning:** image-relative x/y phantom offset and localized rotation.
-  This is not external laser alignment.
+  explicit insert geometry and calibration.  At least three slices are
+  required, and the DICOM ``SliceThickness`` tag is never reported as a phantom
+  measurement.
+* **Positioning:** image-relative x/y phantom offset, tolerance excess, and
+  localization confidence.  This is not external laser alignment.
 
 The result also contains ``helios_compatibility``.  It retains the output
 shape useful for comparing a GE scan with the existing Helios analyzer:
@@ -197,10 +230,16 @@ all module result objects, the Helios-compatible comparison block,
 availability/reason text, pass/fail values, warning count, and an overall
 state.  The overall state is:
 
-* ``False`` when an available configured test fails;
-* ``True`` when every available configured test passes;
-* ``None`` when no acceptance limits were supplied or a required test is
-  unavailable.
+* ``FAIL`` when at least one evaluated test fails;
+* ``INCOMPLETE`` when a required test is unavailable or not evaluated;
+* ``NOT_VALIDATED`` when the selected scanner/phantom reference scope is not
+  validated for that combination;
+* ``PASS`` only when all required tests are evaluated and pass.
+
+The legacy ``overall_passed`` field remains available as ``False`` for
+``FAIL``, ``True`` for ``PASS``, and ``None`` for the other states.  Separate
+counts report passed, failed, not-evaluated, unavailable, warning, and
+extrapolated results.
 
 Use ``results_data(as_dict=True)`` or ``results_data(as_json=True)`` for
 external QA applications and trending.  ``plot_analyzed_image`` and
