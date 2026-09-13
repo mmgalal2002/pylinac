@@ -335,3 +335,19 @@ class TestGECTQA(TestCase):
             self.assertGreater(Path(report_name).stat().st_size, 0)
         finally:
             Path(report_name).unlink()
+
+    def test_human_report_omits_paths_and_missing_result_details(self) -> None:
+        qa = GECTQA(self.folder)
+        qa.analyze(angle_override=0)
+        report = qa.results()
+
+        for forbidden in (
+            "Study UID",
+            "Series UID",
+            "reason=",
+            "unavailable",
+            "not evaluated",
+            "passed=None",
+            "None",
+        ):
+            self.assertNotIn(forbidden.lower(), report.lower())
