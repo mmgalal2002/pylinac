@@ -11,6 +11,7 @@ from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import Canvas
 
 from .. import __version__
@@ -117,6 +118,94 @@ class PylinacCanvas:
             for line in text:
                 textobj.textLine(line)
         self.canvas.drawText(textobj)
+
+    def add_paged_text(
+        self,
+        text: str | Sequence[str],
+        location: tuple[float, float] = (2.5, 24),
+        font_size: int = 10,
+        line_height: float = 0.42,
+        max_width: float = 17.5,
+        bottom_margin: float = 1.5,
+        font: str | None = None,
+    ) -> None:
+        """Add wrapped text while keeping every line inside the page bounds.
+
+        Parameters
+        ----------
+        text : str or sequence of str
+            Text is rendered one logical line at a time. Newline characters in
+            a string are treated as line breaks.
+        location : tuple of float
+            Starting position in centimetres from the lower-left corner.
+        font_size : int
+            Font size in points.
+        line_height : float
+            Vertical distance between rendered lines in centimetres.
+        max_width : float
+            Maximum rendered line width in centimetres.
+        bottom_margin : float
+            Minimum y position in centimetres before a new page is started.
+        font : str, optional
+            ReportLab font name. Defaults to the canvas font.
+        """
+        font = font or self._font
+        logical_lines = (
+            text.splitlines()
+            if isinstance(text, str)
+            else [line for value in text for line in str(value).splitlines()]
+        )
+        if not logical_lines:
+            logical_lines = [""]
+
+        max_width_points = max_width * cm
+
+        def wrap_line(line: str) -> list[str]:
+            if not line:
+                return [""]
+            wrapped: list[str] = []
+            remaining = line
+            while remaining:
+                if stringWidth(remaining, font, font_size) <= max_width_points:
+                    wrapped.append(remaining)
+                    break
+                low = 1
+                high = len(remaining)
+                best = 1
+                while low <= high:
+                    middle = (low + high) // 2
+                    if (
+                        stringWidth(remaining[:middle], font, font_size)
+                        <= max_width_points
+                    ):
+                        best = middle
+                        low = middle + 1
+                    else:
+                        high = middle - 1
+                break_at = remaining.rfind(" ", 0, best + 1)
+                if break_at <= 0:
+                    break_at = best
+                segment = remaining[:break_at].rstrip()
+                if not segment:
+                    segment = remaining[:best]
+                    break_at = best
+                wrapped.append(segment)
+                remaining = remaining[break_at:].lstrip()
+            return wrapped
+
+        current_y = location[1]
+        for logical_line in logical_lines:
+            for line in wrap_line(logical_line):
+                if current_y < bottom_margin:
+                    self.add_new_page()
+                    current_y = location[1]
+                self.add_text(
+                    text=line,
+                    location=(location[0], current_y),
+                    font_size=font_size,
+                    font=font,
+                )
+                current_y -= line_height
 
     def add_image(
         self,
