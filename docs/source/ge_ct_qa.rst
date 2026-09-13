@@ -200,9 +200,9 @@ current measurement paths are:
   deviation, extrema, and per-target CNR when target ROIs are configured.  The
   GE visual observer score is not fabricated from grid statistics.
 * **Slice thickness:** a configured axial profile measured by FWHM, with an
-  explicit insert geometry and calibration.  At least three slices are
-  required, and the DICOM ``SliceThickness`` tag is never reported as a phantom
-  measurement.
+  explicit, non-empty, validated insert geometry and calibration metadata.
+  At least three slices must remain inside the sampling window, and the DICOM
+  ``SliceThickness`` tag is never reported as a phantom measurement.
 * **Positioning:** image-relative x/y phantom offset, tolerance excess, and
   localization confidence.  This is not external laser alignment.
 
@@ -219,7 +219,8 @@ External laser and light-field alignment
 A normal CT DICOM series does not contain enough information to measure
 external room lasers or a radiation light field.  The ``alignment`` result is
 therefore explicitly unavailable and states that a dedicated acquisition is
-required.  It is kept separate from the image-based ``positioning`` result.
+required.  It is marked not applicable to routine-CT overall aggregation and
+kept separate from the image-based ``positioning`` result.
 
 Results and exports
 -------------------
@@ -239,7 +240,8 @@ state.  The overall state is:
 The legacy ``overall_passed`` field remains available as ``False`` for
 ``FAIL``, ``True`` for ``PASS``, and ``None`` for the other states.  Separate
 counts report passed, failed, not-evaluated, unavailable, warning, and
-extrapolated results.
+extrapolated results.  ``num_tests`` is the number of applicable tests; a
+non-applicable routine-CT alignment result is not included in that denominator.
 
 Use ``results_data(as_dict=True)`` or ``results_data(as_json=True)`` for
 external QA applications and trending.  ``plot_analyzed_image`` and
