@@ -388,6 +388,8 @@ class GECTQAHighContrastResult(GECTQATestResult):
     resolution_lp_cm: float | None = None
     mtf: dict[str, float] | None = None
     method: str = "Helios-compatible ROI standard deviation and relative MTF"
+    measured_bar_sizes_mm: list[float] = Field(default_factory=list)
+    unmeasured_bar_sizes_mm: list[float] = Field(default_factory=list)
 
 
 class GECTQALowContrastROIResult(GECTQAROIResult):
@@ -1244,6 +1246,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         slice_index: int,
         offset_mm: float,
         module_name: str,
+        add_to_plot: bool = True,
     ) -> tuple[GECTQAROIResult, DiskROI | RectangleROI]:
         image_array = np.asarray(self.dicom_stack[slice_index].array)
         roi = self._create_roi(image_array, definition)
@@ -1275,7 +1278,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             percentiles=percentiles,
             pixel_count=int(values.size),
         )
-        self._plot_entries.append((slice_index, roi, f"{module_name}: {name}"))
+        if add_to_plot:
+            self._plot_entries.append((slice_index, roi, f"{module_name}: {name}"))
         return result, roi
 
     @staticmethod
@@ -1568,6 +1572,15 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 [result.passed for result in roi_results.values()]
             )
         )
+        measured_bar_sizes = [
+            1 / (2 * definition.spatial_frequency_lp_mm)
+            for definition in self.config.high_contrast_rois.values()
+        ]
+        unmeasured_bar_sizes = [
+            size
+            for size in GE_QA_HIGH_CONTRAST_BAR_SIZES_MM
+            if not any(np.isclose(size, measured) for measured in measured_bar_sizes)
+        ]
         return GECTQAHighContrastResult(
             available=True,
             passed=passed,
@@ -1576,6 +1589,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             resolution_lp_mm=resolution,
             resolution_lp_cm=resolution * 10 if resolution is not None else None,
             mtf=mtf_values,
+            measured_bar_sizes_mm=measured_bar_sizes,
+            unmeasured_bar_sizes_mm=unmeasured_bar_sizes,
         )
 
     def _analyze_low_contrast(self) -> GECTQALowContrastResult:
@@ -1914,6 +1929,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     section1,
                     self.config.section1_location_mm,
                     "Helios contrast scale",
+                    add_to_plot=False,
                 )
             plastic = contrast_results["Plexiglass"]
             water = contrast_results["Water"]
@@ -1940,6 +1956,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     section1,
                     self.config.section1_location_mm,
                     "Helios high contrast",
+                    add_to_plot=False,
                 )
             high_rois = [
                 self._create_roi(self._image_array(section1), high_definitions[name])
@@ -2007,6 +2024,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     uniformity,
                     self.config.section3_location_mm,
                     "Helios noise uniformity",
+                    add_to_plot=False,
                 )
             noise_definition = GECTQAROI(
                 x_mm=0,
@@ -2020,6 +2038,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 uniformity,
                 self.config.section3_location_mm,
                 "Helios noise",
+                add_to_plot=False,
             )
             outer_mean = float(
                 np.mean(
@@ -2211,6 +2230,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             if data.high_contrast_resolution.mtf
             and data.high_contrast_resolution.mtf.get("50") is not None
             else "  Relative MTF: unavailable",
+            f"  Unmeasured documented bar groups: {data.high_contrast_resolution.unmeasured_bar_sizes_mm}",
             f"  Reference check passed: {data.high_contrast_resolution.passed}",
             "Low Contrast Detectability",
             f"  15 x 15 grid: mean={data.low_contrast.grid_mean_hu:.2f} HU, SD={data.low_contrast.grid_std_hu:.2f} HU, range={data.low_contrast.grid_min_hu:.2f} to {data.low_contrast.grid_max_hu:.2f} HU"
@@ -2263,11 +2283,25 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             color="red",
             marker="+",
         )
-        for entry_slice, roi, label in self._plot_entries:
+        for entry_number, (entry_slice, roi, label) in enumerate(self._plot_entries):
             if entry_slice != slice_index:
                 continue
             roi.plot2axes(axis, edgecolor="cyan")
-            axis.text(roi.center.x, roi.center.y, label, color="white", fontsize=7)
+            short_label = label.split(": ", 1)[-1]
+            if short_label.startswith("candidate_"):
+                short_label = "C" + short_label.removeprefix("candidate_")
+            elif short_label == "background":
+                short_label = "BG"
+            axis.annotate(
+                short_label,
+                xy=(roi.center.x, roi.center.y),
+                xytext=(4, -8 - 10 * (entry_number % 4)),
+                textcoords="offset points",
+                color="white",
+                fontsize=6,
+                bbox={"facecolor": "black", "alpha": 0.55, "pad": 1},
+                arrowprops={"arrowstyle": "-", "color": "cyan", "alpha": 0.6},
+            )
 
     def _plot_side(self, axis: plt.Axes) -> None:
         side_array = self.dicom_stack.side_view(axis=1)
