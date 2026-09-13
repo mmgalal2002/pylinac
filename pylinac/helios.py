@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import textwrap
 import webbrowser
 from collections.abc import Callable
 from io import BytesIO
@@ -1203,29 +1202,42 @@ class GEHeliosCTDaily(CatPhanBase, ResultsDataMixin[GEHeliosResult]):
         """
         analysis_title = f"{self._model} Analysis"
         analysis_images = self.save_images(to_stream=True)
+        report_metadata = {
+            key: value
+            for key, value in (metadata or {}).items()
+            if not any(
+                token in str(key).lower() for token in ("file", "path", "filename")
+            )
+            and not isinstance(value, Path)
+            and "\\" not in str(value)
+            and "/" not in str(value)
+        }
 
         canvas = pdf.PylinacCanvas(
-            filename, page_title=analysis_title, metadata=metadata, logo=logo
+            str(filename),
+            page_title=analysis_title,
+            metadata=report_metadata or None,
+            logo=logo,
         )
+        report_lines: list[str] = []
         if notes is not None:
-            canvas.add_text(text="Notes:", location=(1, 4.5), font_size=14)
-            canvas.add_text(text=notes, location=(1, 4))
-
-        shortened_texts = [
-            textwrap.wrap(r, width=110) for r in self.results(as_str=False)
-        ]
-        idx = 0
-        for wrapped_lines in shortened_texts:
-            for text in wrapped_lines:
-                canvas.add_text(text=text, location=(2.5, 24 - idx * 0.5))
-                idx += 1
+            report_lines.extend(["Notes:", *notes.splitlines(), ""])
+        report_lines.extend(self.results(as_str=False))
+        canvas.add_paged_text(
+            report_lines,
+            location=(2.5, 24),
+            font_size=9,
+            line_height=0.38,
+            max_width=17.5,
+            bottom_margin=1.5,
+        )
         for page, img in enumerate(analysis_images):
             canvas.add_new_page()
             canvas.add_image(img, location=(1, 5), dimensions=(18, 18))
         canvas.finish()
 
         if open_file:
-            webbrowser.open(filename)
+            webbrowser.open(str(filename))
 
     def results(self, as_str: bool = True) -> str | tuple:
         """Return the results of the analysis as a string. Use with print().
