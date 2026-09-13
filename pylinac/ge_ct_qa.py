@@ -9,7 +9,6 @@ from a CatPhan or GE Helios phantom.
 from __future__ import annotations
 
 import io
-import textwrap
 import warnings
 import webbrowser
 from collections.abc import Sequence
@@ -3636,21 +3635,6 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     def results(self) -> str:
         """Return a concise human-readable report."""
         data = self.results_data()
-        status = data.overall_status
-        material_lines = [
-            f"  {name}: {result.mean_hu:.2f} HU (nominal={result.nominal_hu}, passed={result.passed})"
-            for name, result in data.ct_number.rois.items()
-        ]
-        high_lines = [
-            f"  {name}: SD={result.std_hu:.2f} HU (reference={result.reference_std_hu}, status={'PASS' if result.passed is True else 'FAIL' if result.passed is False else 'NOT_EVALUATED'})"
-            for name, result in data.high_contrast_resolution.rois.items()
-        ]
-        mtf_lines = [
-            f"  MTF {name}%: {result.value:.3f} lp/mm - {result.status.lower()}"
-            if result.value is not None
-            else f"  MTF {name}%: unavailable - {result.status.lower()}"
-            for name, result in data.high_contrast_resolution.mtf_results.items()
-        ]
         reference_scope = {
             "shared_ge_reference": "Shared GE reference",
             "manufacturer_reference": "Manufacturer/reference value",
@@ -3661,81 +3645,159 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             "-------------------------",
             f"Phantom: {data.phantom_model}",
             f"Scanner: {data.configuration.scanner_display_name}",
-            f"Scanner model from DICOM: {data.scanner_model or 'unknown'}",
             f"Selected scanner profile: {data.configuration.scanner_display_name} ({data.configuration.scanner_id})",
             f"Selected phantom profile: {data.configuration.phantom_display_name} ({data.configuration.phantom_id})",
             f"Profile selection source: {data.configuration.source}",
-            f"Reference applicability: {data.reference.scanner_reference_status}",
-            f"Reference source: {data.reference.source}",
             f"Reference scope: {reference_scope}",
-            f"User overrides: {self.config.user_overrides or 'none'}",
             f"Algorithm version: {data.pylinac_version}",
             "Acquisition identity",
-            f"  Manufacturer: {data.metadata.manufacturer}",
-            f"  Scanner model from DICOM: {data.metadata.manufacturer_model_name}",
-            f"  Study UID: {data.metadata.study_instance_uid}",
-            f"  Series UID: {data.metadata.series_instance_uid}",
-            f"  Number of images: {data.num_images}",
-            f"  Slice thickness: {data.metadata.slice_thickness_mm} mm",
-            f"  Pixel spacing: {data.metadata.pixel_spacing_mm} mm",
-            f"  kVp: {data.metadata.kvp}",
-            f"  Kernel: {data.metadata.convolution_kernel}",
-            f"  Protocol name: {data.metadata.protocol_name}",
-            f"Matrix/pixel spacing: {data.metadata.rows} x {data.metadata.columns} / {data.metadata.pixel_spacing_mm} mm",
-            f"Acquisition: {data.metadata.kvp} kVp, {data.metadata.tube_current_ma} mA, kernel={data.metadata.convolution_kernel}",
             f"Phantom diameter: {data.localization.phantom_diameter_mm:.1f} mm",
             f"Orientation: detected={data.localization.orientation_detected}, default={data.localization.orientation_default_deg} deg, final={data.localization.phantom_rotation_deg:.2f} deg, source={data.localization.orientation_source}, confidence={data.localization.orientation_confidence}",
             f"Module slices: Section 1={data.module_locations.section1_slice_index} (z={data.module_locations.section1_physical_z_mm:.1f}), uniformity={data.module_locations.uniformity_slice_index} (z={data.module_locations.uniformity_physical_z_mm:.1f}), low contrast={data.module_locations.low_contrast_slice_index} (z={data.module_locations.low_contrast_physical_z_mm:.1f})",
-            "",
-            "CT Number Accuracy",
-            *material_lines,
-            f"  Status: {data.ct_number.status}; reason={data.ct_number.reason}",
-            "Contrast Scale",
-            f"  Plexiglass - water: {data.contrast_scale.contrast_scale:.2f} HU (reference={data.reference.plexiglass_water_difference_hu} +/- {data.reference.plexiglass_water_tolerance_hu}; status={data.contrast_scale.status})"
-            if data.contrast_scale.contrast_scale is not None
-            else "  unavailable",
-            "Noise and Uniformity",
-            f"  Noise: {data.noise.noise_hu:.2f} HU (reference={data.reference.noise_nominal_hu} +/- {data.reference.noise_tolerance_hu}; status={data.noise.status})"
-            if data.noise.noise_hu is not None
-            else "  unavailable",
-            f"  Uniformity max deviation: {data.uniformity.max_deviation_from_center_hu:.2f} HU (limit={data.reference.uniformity_difference_tolerance_hu}; status={data.uniformity.status})"
-            if data.uniformity.max_deviation_from_center_hu is not None
-            else "  unavailable",
-            "High Contrast Spatial Resolution",
-            *high_lines,
-            f"  Relative MTF 50%: {data.high_contrast_resolution.mtf.get('50'):.3f} lp/mm"
-            if data.high_contrast_resolution.mtf
-            and data.high_contrast_resolution.mtf.get("50") is not None
-            else "  Relative MTF: unavailable",
-            f"  Unmeasured documented bar groups: {data.high_contrast_resolution.unmeasured_bar_sizes_mm}",
-            *mtf_lines,
-            f"  Status: {data.high_contrast_resolution.status}; reason={data.high_contrast_resolution.reason}",
-            "Low Contrast Detectability",
-            f"  15 x 15 grid: mean={data.low_contrast.grid_mean_hu:.2f} HU, SD={data.low_contrast.grid_std_hu:.2f} HU, range={data.low_contrast.grid_min_hu:.2f} to {data.low_contrast.grid_max_hu:.2f} HU"
-            if data.low_contrast.grid_mean_hu is not None
-            else "  unavailable",
-            f"  Status: {data.low_contrast.status}; reason={data.low_contrast.reason}",
-            "Slice Thickness",
-            f"  DICOM acquired SliceThickness: {data.slice_thickness.acquired_slice_thickness_mm} mm",
-            f"  Phantom measurement: {data.slice_thickness.measured_slice_thickness_mm if data.slice_thickness.available else 'not available'}",
-            f"  Status: {data.slice_thickness.status}; reason={data.slice_thickness.reason}",
-            "Positioning and Alignment",
-            f"  Image offset: x={data.positioning.offset_x_mm:.2f} mm, y={data.positioning.offset_y_mm:.2f} mm; tolerance={data.positioning.tolerance_mm} mm; excess={data.positioning.excess_mm} mm; confidence={data.positioning.confidence}; status={data.positioning.status}",
-            f"  External laser/light-field: status={data.alignment.status}; reason={data.alignment.reason}",
-            "Helios-compatible comparison",
-            f"  Relative MTF 50%: {data.helios_compatibility.high_contrast.mtf_50_lp_mm:.3f} lp/mm"
-            if data.helios_compatibility and data.helios_compatibility.high_contrast
-            else "  unavailable",
-            f"  Low-contrast grid mean/SD: {data.helios_compatibility.low_contrast.mean:.2f} / {data.helios_compatibility.low_contrast.std:.2f} HU"
-            if data.helios_compatibility and data.helios_compatibility.low_contrast
-            else "  unavailable",
-            f"  Validity: {data.helios_compatibility.validity}"
-            if data.helios_compatibility
-            else "  unavailable",
-            "",
-            f"Tests: {data.num_passed} passed, {data.num_failed} failed, {data.num_not_evaluated} not evaluated, {data.num_unavailable} unavailable, {data.num_extrapolated} extrapolated; warnings={data.num_warnings}",
-            f"Overall: {status}",
         ]
+
+        def add_section(title: str, section_lines: list[str]) -> None:
+            populated_lines = [line for line in section_lines if line]
+            if populated_lines:
+                lines.extend(["", title, *populated_lines])
+
+        acquisition_lines = [
+            (
+                f"  Manufacturer: {data.metadata.manufacturer}"
+                if data.metadata.manufacturer is not None
+                else ""
+            ),
+            (
+                f"  Scanner model from DICOM: {data.metadata.manufacturer_model_name}"
+                if data.metadata.manufacturer_model_name is not None
+                else ""
+            ),
+            f"  Number of images: {data.num_images}",
+            (
+                f"  Slice thickness: {data.metadata.slice_thickness_mm} mm"
+                if data.metadata.slice_thickness_mm is not None
+                else ""
+            ),
+            (
+                f"  Pixel spacing: {data.metadata.pixel_spacing_mm} mm"
+                if data.metadata.pixel_spacing_mm is not None
+                else ""
+            ),
+            f"  kVp: {data.metadata.kvp}" if data.metadata.kvp is not None else "",
+            f"  Kernel: {data.metadata.convolution_kernel}"
+            if data.metadata.convolution_kernel is not None
+            else "",
+            f"  Protocol name: {data.metadata.protocol_name}"
+            if data.metadata.protocol_name is not None
+            else "",
+        ]
+        if (
+            data.metadata.rows is not None
+            and data.metadata.columns is not None
+            and data.metadata.pixel_spacing_mm is not None
+        ):
+            acquisition_lines.append(
+                f"Matrix/pixel spacing: {data.metadata.rows} x {data.metadata.columns} / {data.metadata.pixel_spacing_mm} mm"
+            )
+        acquisition_parts = []
+        if data.metadata.kvp is not None:
+            acquisition_parts.append(f"{data.metadata.kvp} kVp")
+        if data.metadata.tube_current_ma is not None:
+            acquisition_parts.append(f"{data.metadata.tube_current_ma} mA")
+        if data.metadata.convolution_kernel is not None:
+            acquisition_parts.append(f"kernel={data.metadata.convolution_kernel}")
+        if acquisition_parts:
+            acquisition_lines.append("Acquisition: " + ", ".join(acquisition_parts))
+        insertion_index = lines.index("Acquisition identity") + 1
+        lines[insertion_index:insertion_index] = [
+            line for line in acquisition_lines if line
+        ]
+
+        add_section(
+            "CT Number Accuracy",
+            [
+                f"  {name}: {result.mean_hu:.2f} HU (nominal={result.nominal_hu}, passed={result.passed})"
+                for name, result in data.ct_number.rois.items()
+                if result.passed is not None
+            ],
+        )
+        add_section(
+            "Contrast Scale",
+            [f"  Plexiglass - water: {data.contrast_scale.contrast_scale:.2f} HU"]
+            if data.contrast_scale.contrast_scale is not None
+            else [],
+        )
+        add_section(
+            "Noise and Uniformity",
+            [
+                f"  Noise: {data.noise.noise_hu:.2f} HU"
+                if data.noise.noise_hu is not None
+                else "",
+                f"  Uniformity max deviation: {data.uniformity.max_deviation_from_center_hu:.2f} HU"
+                if data.uniformity.max_deviation_from_center_hu is not None
+                else "",
+            ],
+        )
+        add_section(
+            "High Contrast Spatial Resolution",
+            [
+                *[
+                    f"  {name}: SD={result.std_hu:.2f} HU (passed={result.passed})"
+                    for name, result in data.high_contrast_resolution.rois.items()
+                    if result.passed is not None
+                ],
+                *[
+                    f"  MTF {name}%: {result.value:.3f} lp/mm ({result.status.lower()})"
+                    for name, result in data.high_contrast_resolution.mtf_results.items()
+                    if result.value is not None
+                    and result.status not in {"NOT_EVALUATED", "UNAVAILABLE"}
+                ],
+            ],
+        )
+        add_section(
+            "Low Contrast Detectability",
+            [
+                f"  15 x 15 grid: mean={data.low_contrast.grid_mean_hu:.2f} HU, SD={data.low_contrast.grid_std_hu:.2f} HU, range={data.low_contrast.grid_min_hu:.2f} to {data.low_contrast.grid_max_hu:.2f} HU"
+            ]
+            if data.low_contrast.grid_mean_hu is not None
+            else [],
+        )
+        add_section(
+            "Slice Thickness",
+            [
+                f"  Phantom measurement: {data.slice_thickness.measured_slice_thickness_mm} mm"
+            ]
+            if data.slice_thickness.measured_slice_thickness_mm is not None
+            else [],
+        )
+        add_section(
+            "Positioning",
+            [
+                f"  Image offset: x={data.positioning.offset_x_mm:.2f} mm, y={data.positioning.offset_y_mm:.2f} mm; tolerance={data.positioning.tolerance_mm} mm; excess={data.positioning.excess_mm} mm; confidence={data.positioning.confidence}; status={data.positioning.status}"
+            ],
+        )
+        if data.helios_compatibility is not None:
+            compatibility_lines = []
+            if (
+                data.helios_compatibility.high_contrast is not None
+                and data.helios_compatibility.high_contrast.mtf_50_lp_mm is not None
+                and np.isfinite(data.helios_compatibility.high_contrast.mtf_50_lp_mm)
+            ):
+                compatibility_lines.append(
+                    f"  Relative MTF 50%: {data.helios_compatibility.high_contrast.mtf_50_lp_mm:.3f} lp/mm"
+                )
+            if data.helios_compatibility.low_contrast is not None:
+                compatibility_lines.append(
+                    f"  Low-contrast grid mean/SD: {data.helios_compatibility.low_contrast.mean:.2f} / {data.helios_compatibility.low_contrast.std:.2f} HU"
+                )
+            add_section("Helios-compatible comparison", compatibility_lines)
+        lines.extend(
+            [
+                "",
+                f"Evaluated tests: {data.num_assessed}; passed={data.num_passed}; failed={data.num_failed}",
+                f"Overall: {data.overall_status}",
+            ]
+        )
         return "\n".join(lines)
 
     def _plot_axial(self, axis: plt.Axes, slice_index: int) -> None:
@@ -3982,17 +4044,34 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     ) -> None:
         """Publish a PDF containing structured results and analysis plots."""
         analysis_images = self.save_images(to_stream=True)
+        report_metadata = {
+            key: value
+            for key, value in (metadata or {}).items()
+            if not any(
+                token in str(key).lower() for token in ("file", "path", "filename")
+            )
+            and not isinstance(value, Path)
+            and "\\" not in str(value)
+            and "/" not in str(value)
+        }
         canvas = pdf.PylinacCanvas(
             str(filename),
             page_title=f"{self._model} Analysis",
-            metadata=metadata,
+            metadata=report_metadata or None,
             logo=logo,
         )
+        report_lines: list[str] = []
         if notes is not None:
-            canvas.add_text(text="Notes:", location=(1, 4.5), font_size=14)
-            canvas.add_text(text=notes, location=(1, 4))
-        for index, line in enumerate(textwrap.wrap(self.results(), width=110)):
-            canvas.add_text(text=line, location=(2.5, 24 - index * 0.5))
+            report_lines.extend(["Notes:", *notes.splitlines(), ""])
+        report_lines.extend(self.results().splitlines())
+        canvas.add_paged_text(
+            report_lines,
+            location=(2.5, 24),
+            font_size=9,
+            line_height=0.38,
+            max_width=17.5,
+            bottom_margin=1.5,
+        )
         for image in analysis_images:
             canvas.add_new_page()
             canvas.add_image(image, location=(1, 5), dimensions=(18, 18))
