@@ -1113,12 +1113,17 @@ class GECTQAPositioningResult(GECTQATestResult):
     rotation_deg: float | None = None
     tolerance_mm: float | None = None
     excess_mm: float | None = None
+    expected_center_x_mm: float | None = None
+    expected_center_y_mm: float | None = None
 
 
 class GECTQAAlignmentResult(GECTQATestResult):
     """Explicit result for external laser/light-field alignment."""
 
     mode: str = "external_acquisition_required"
+    acquisition_type: str | None = None
+    external_marker_geometry: dict[str, Any] | None = None
+    laser_reference_geometry: dict[str, Any] | None = None
 
 
 class GECTQALocalizationResult(BaseModel):
@@ -1829,6 +1834,11 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         center_override: tuple[float, float] | None,
         angle_override: float | None,
     ) -> GECTQALocalizationResult:
+        if not self.config.geometry_available and center_override is None:
+            raise ValueError(
+                "Selected phantom profile does not include validated geometry. "
+                "Supply a custom phantom geometry and center_override."
+            )
         observations: list[tuple[float, float, float]] = []
         self._localization_slice_indices: list[int] = []
         for slice_index, image in enumerate(self.dicom_stack):
