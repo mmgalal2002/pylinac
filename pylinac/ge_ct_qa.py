@@ -892,15 +892,37 @@ def detect_phantom_profile(
     metadata_values: Sequence[str | None],
     scanner_profile: GECTQAScannerProfile,
 ) -> tuple[GECTQAPhantomProfile, Literal["dicom", "fallback"], list[str]]:
-    """Resolve an explicit phantom mention, otherwise use the scanner default."""
-    text = " ".join(value.lower() for value in metadata_values if value)
-    if "helios" in text:
+    """Resolve an explicit phantom-labeled mention, otherwise use the default."""
+    text = " ".join(
+        value.lower().replace("_", " ") for value in metadata_values if value
+    )
+    helios_markers = (
+        "helios phantom",
+        "helios-compatible qa phantom",
+        "phantom helios",
+    )
+    optima_markers = (
+        "optima phantom",
+        "optima qa phantom",
+        "phantom optima",
+    )
+    helios_found = any(marker in text for marker in helios_markers)
+    optima_found = any(marker in text for marker in optima_markers)
+    if helios_found and optima_found:
+        return (
+            PHANTOM_PROFILES[scanner_profile.default_phantom_profile],
+            "fallback",
+            [
+                "DICOM metadata contains ambiguous phantom labels; scanner profile default phantom applied."
+            ],
+        )
+    if helios_found:
         return (
             PHANTOM_PROFILES[GE_HELIOS_COMPATIBLE_QA_PHANTOM],
             "dicom",
             [],
         )
-    if "optima" in text:
+    if optima_found:
         return PHANTOM_PROFILES[GE_OPTIMA_QA_PHANTOM], "dicom", []
     return (
         PHANTOM_PROFILES[scanner_profile.default_phantom_profile],
@@ -954,6 +976,7 @@ class GECTQATestResult(BaseModel):
     """Common availability and pass/fail state for a GE QA test."""
 
     available: bool
+    applicable: bool = True
     passed: bool | None
     status: GECTQAStatus = "NOT_EVALUATED"
     measured_value: float | int | str | None = None
@@ -1744,7 +1767,8 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             )
             if phantom_source == "fallback":
                 phantom_warnings = [
-                    "Phantom model was not identified from DICOM; the scanner profile default phantom was applied."
+                    *phantom_warnings,
+                    "Phantom model was not identified from DICOM; the scanner profile default phantom was applied.",
                 ]
 
         profile_config = GECTQAConfig.from_profile(
@@ -1759,7 +1783,30 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 "phantom_profile",
                 "user_overrides",
             }
-            if requested_config.model_fields_set <= identity_only_fields:
+            legacy_geometry_fields = {
+                "expected_diameter_range_mm",
+                "section1_location_mm",
+                "section3_location_mm",
+                "ct_number_rois",
+                "contrast_scale",
+                "noise_roi",
+                "uniformity_rois",
+                "high_contrast_rois",
+                "low_contrast",
+                "slice_thickness",
+                "high_contrast_roi_positions_mm",
+                "high_contrast_roi_sizes_mm",
+                "uniformity_peripheral_offsets_mm",
+                "external_marker_geometry",
+                "laser_reference_geometry",
+            }
+            inherits_profile = not bool(
+                requested_config.model_fields_set & legacy_geometry_fields
+            )
+            if (
+                requested_config.model_fields_set <= identity_only_fields
+                or inherits_profile
+            ):
                 explicitly_configured = requested_config.model_dump(
                     mode="python", include=requested_config.model_fields_set
                 )
@@ -1768,7 +1815,37 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             explicitly_configured.pop("scanner_profile", None)
             explicitly_configured.pop("phantom_profile", None)
             merged_config = profile_config.model_dump(mode="python")
+            if (
+                "reference_parameters" in explicitly_configured
+                and "reference_parameters" in requested_config.model_fields_set
+            ):
+                profile_parameters = merged_config.get("reference_parameters", {})
+                profile_parameters.update(explicitly_configured["reference_parameters"])
+                explicitly_configured["reference_parameters"] = profile_parameters
             merged_config.update(explicitly_configured)
+            if (
+                inherits_profile
+                and "reference_parameters" not in requested_config.model_fields_set
+            ):
+                flat_reference_fields = {
+                    "noise_reference_hu": "noise_nominal_hu",
+                    "noise_tolerance_hu": "noise_tolerance_hu",
+                    "uniformity_reference_hu": "uniformity_difference_nominal_hu",
+                    "uniformity_tolerance_hu": "uniformity_difference_tolerance_hu",
+                    "positioning_tolerance_mm": "positioning_tolerance_mm",
+                }
+                reference_parameters = merged_config.get("reference_parameters", {})
+                for field_name, parameter_name in flat_reference_fields.items():
+                    if field_name not in requested_config.model_fields_set:
+                        continue
+                    existing = reference_parameters.get(parameter_name, {})
+                    reference_parameters[parameter_name] = {
+                        **existing,
+                        "value": explicitly_configured.get(field_name),
+                        "is_default": False,
+                        "is_user_override": True,
+                    }
+                merged_config["reference_parameters"] = reference_parameters
             resolved_config = GECTQAConfig.model_validate(merged_config)
             resolved_config = resolved_config.model_copy(
                 update={
@@ -2311,7 +2388,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
     def _reference_number(self, name: str, configured: float | None) -> float | None:
         """Resolve a numeric reference parameter before a legacy config value."""
         parameter = self.config.reference_parameters.get(name)
-        if parameter is not None and parameter.value is not None:
+        if parameter is not None:
+            if parameter.value is None:
+                return None
             try:
                 return float(parameter.value)
             except (TypeError, ValueError):
@@ -2644,6 +2723,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         mtf_values: dict[str, float] | None = None
         mtf_results: dict[str, GECTQAMTFResult] = {}
         mtf_50 = None
+        resolution_reason = None
         try:
             ordered_names = list(self.config.high_contrast_rois)
             ordered_rois = [
@@ -2714,13 +2794,16 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                     ),
                 )
                 mtf_values[str(percentage)] = value
-            mtf_50 = (
-                mtf_results.get("50").value
-                if mtf_results.get("50") is not None
-                else None
-            )
+            mtf_50_result = mtf_results.get("50")
+            mtf_50 = mtf_50_result.value if mtf_50_result is not None else None
             if resolution is None:
-                resolution = mtf_50
+                if mtf_50_result is not None and not mtf_50_result.extrapolated:
+                    resolution = mtf_50
+                elif mtf_50_result is not None and mtf_50_result.extrapolated:
+                    resolution_reason = (
+                        "The 50% MTF value was extrapolated and was excluded from "
+                        "the high-contrast acceptance check."
+                    )
         except (IndexError, KeyError, ValueError, TypeError):
             mtf_values = None
             for percentage in self.config.mtf_requested_levels:
@@ -2735,14 +2818,16 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                         reason="MTF could not be calculated from the configured high-contrast ROIs.",
                     ),
                 )
-        passed = (
-            resolution >= self.config.minimum_resolution_lp_mm
-            if resolution is not None
-            and self.config.minimum_resolution_lp_mm is not None
-            else self._combine_known_passes(
+        if self.config.minimum_resolution_lp_mm is not None:
+            passed = (
+                resolution >= self.config.minimum_resolution_lp_mm
+                if resolution is not None
+                else None
+            )
+        else:
+            passed = self._combine_known_passes(
                 [result.passed for result in roi_results.values()]
             )
-        )
         measured_bar_sizes = [
             1 / (2 * definition.spatial_frequency_lp_mm)
             for definition in self.config.high_contrast_rois.values()
@@ -2766,9 +2851,13 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             measured_value=resolution,
             unit="lp/mm",
             reason=(
-                "No validated high-contrast reference or minimum resolution criterion was configured."
-                if passed is None
-                else None
+                resolution_reason
+                or (
+                    "No validated high-contrast reference or minimum resolution "
+                    "criterion was configured."
+                    if passed is None
+                    else None
+                )
             ),
             parameters_used={
                 "bar_sizes_mm": measured_bar_sizes,
@@ -2924,10 +3013,33 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
                 "Required GE slice-thickness insert geometry and calibration were not supplied.",
                 acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
             )
-        if definition.insert_geometry is None or definition.profile_calibration is None:
+        if (
+            not definition.insert_geometry
+            or not definition.profile_calibration
+            or definition.insert_geometry.get("validated") is not True
+            or definition.profile_calibration.get("validated") is not True
+            or not definition.method.strip()
+        ):
             return self._unavailable(
                 GECTQASliceThicknessResult,
-                "Required GE slice-thickness insert geometry and calibration were not supplied.",
+                "Required GE slice-thickness insert geometry and calibration were not supplied or validated.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
+            )
+        calibration_factor = definition.correction_factor
+        configured_factor = definition.profile_calibration.get("correction_factor")
+        if configured_factor is not None:
+            try:
+                calibration_factor = float(configured_factor)
+            except (TypeError, ValueError):
+                return self._unavailable(
+                    GECTQASliceThicknessResult,
+                    "The validated slice-thickness calibration factor is invalid.",
+                    acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
+                )
+        if calibration_factor <= 0:
+            return self._unavailable(
+                GECTQASliceThicknessResult,
+                "The validated slice-thickness calibration factor must be positive.",
                 acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
             )
         if self.num_images < 3 or self.slice_spacing_mm is None:
@@ -2959,6 +3071,12 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             keep = np.abs(profile_z - target_z) <= definition.sample_half_range_mm
             profile_z = profile_z[keep]
             values = list(np.asarray(values)[keep])
+        if profile_z.size < 3 or len(values) < 3:
+            return self._unavailable(
+                GECTQASliceThicknessResult,
+                "The configured slice-thickness sampling window contains fewer than three acquired slices.",
+                acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
+            )
         profile_values = np.asarray(values, dtype=float)
         if definition.polarity == "dark":
             profile_values = -profile_values
@@ -2999,7 +3117,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             profile_values[group_end + 1],
             half_level,
         )
-        measured = abs(right_position - left_position) * definition.correction_factor
+        measured = abs(right_position - left_position) * calibration_factor
         difference = (
             measured - definition.nominal_mm
             if definition.nominal_mm is not None
@@ -3031,6 +3149,11 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             profile_z_mm=[float(value) for value in profile_z],
             profile_values_hu=[float(value) for value in profile_values],
             acquired_slice_thickness_mm=self._metadata.slice_thickness_mm,
+            parameters_used={
+                "insert_geometry": definition.insert_geometry,
+                "profile_calibration": definition.profile_calibration,
+                "slice_thickness_method": definition.method,
+            },
         )
 
     @staticmethod
@@ -3119,7 +3242,9 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
 
         def parameter_value(name: str, configured: float | None) -> float | None:
             parameter = self.config.reference_parameters.get(name)
-            if parameter is not None and parameter.value is not None:
+            if parameter is not None:
+                if parameter.value is None:
+                    return None
                 return float(parameter.value)
             return configured
 
@@ -3267,33 +3392,37 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             max(0, min(self.num_images - 1, low_contrast + offset))
             for offset in (0, -1, -2)
         ]
-        try:
-            low_means = []
-            low_stds = []
-            for number, slice_index in enumerate(low_slice_indices, start=1):
-                grid = self._grid_statistics(slice_index)
-                low_means.append(float(grid["mean"]))
-                low_stds.append(float(grid["std"]))
-                low_slices[f"slice_{number}"] = GECTQAHeliosLowContrastSliceResult(
-                    slice_index=slice_index,
-                    physical_z_mm=float(self.z_positions[slice_index]),
-                    offset_from_center_slice_mm=float(
-                        self.z_positions[slice_index] - self.z_positions[low_contrast]
-                    ),
-                    mean=float(grid["mean"]),
-                    std=float(grid["std"]),
-                    min_hu=float(grid["min"]),
-                    max_hu=float(grid["max"]),
-                )
-            low_contrast_result = GECTQAHeliosLowContrastResult(
-                slices=low_slices,
-                mean=float(np.mean(low_means)),
-                std=float(np.mean(low_stds)),
-                cell_size_mm=5.0,
-                num_cells=15,
-            )
-        except (IndexError, ValueError, KeyError):
+        if self.num_images < 3 or len(set(low_slice_indices)) != 3:
             low_contrast_result = None
+        else:
+            try:
+                low_means = []
+                low_stds = []
+                for number, slice_index in enumerate(low_slice_indices, start=1):
+                    grid = self._grid_statistics(slice_index)
+                    low_means.append(float(grid["mean"]))
+                    low_stds.append(float(grid["std"]))
+                    low_slices[f"slice_{number}"] = GECTQAHeliosLowContrastSliceResult(
+                        slice_index=slice_index,
+                        physical_z_mm=float(self.z_positions[slice_index]),
+                        offset_from_center_slice_mm=float(
+                            self.z_positions[slice_index]
+                            - self.z_positions[low_contrast]
+                        ),
+                        mean=float(grid["mean"]),
+                        std=float(grid["std"]),
+                        min_hu=float(grid["min"]),
+                        max_hu=float(grid["max"]),
+                    )
+                low_contrast_result = GECTQAHeliosLowContrastResult(
+                    slices=low_slices,
+                    mean=float(np.mean(low_means)),
+                    std=float(np.mean(low_stds)),
+                    cell_size_mm=5.0,
+                    num_cells=15,
+                )
+            except (IndexError, ValueError, KeyError):
+                low_contrast_result = None
 
         noise_uniformity = None
         try:
@@ -3414,6 +3543,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             "positioning": positioning,
             "alignment": GECTQAAlignmentResult(
                 available=False,
+                applicable=False,
                 passed=None,
                 reason=(
                     "A routine CT DICOM series does not contain external laser or "
@@ -3439,11 +3569,16 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         if not self._analysis_complete:
             raise ValueError("The GE CT QA phantom has not been analyzed yet.")
         tests = list(self._analysis.values())
-        available_tests = [test for test in tests if test.available]
+        applicable_tests = [test for test in tests if test.applicable]
+        available_tests = [test for test in applicable_tests if test.available]
         passed_tests = [test for test in available_tests if test.passed is True]
         failed_tests = [test for test in available_tests if test.passed is False]
-        not_evaluated_tests = [test for test in tests if test.status == "NOT_EVALUATED"]
-        unavailable_tests = [test for test in tests if test.status == "UNAVAILABLE"]
+        not_evaluated_tests = [
+            test for test in applicable_tests if test.status == "NOT_EVALUATED"
+        ]
+        unavailable_tests = [
+            test for test in applicable_tests if test.status == "UNAVAILABLE"
+        ]
         mtf_results = self._analysis["high_contrast_resolution"].mtf_results
         extrapolated_count = sum(
             1 for result in mtf_results.values() if result.extrapolated
@@ -3451,7 +3586,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         if failed_tests:
             overall_passed = False
             overall_status = "FAIL"
-        elif not_evaluated_tests or unavailable_tests:
+        elif not_evaluated_tests or unavailable_tests or not applicable_tests:
             overall_passed = None
             overall_status = "INCOMPLETE"
         elif (
@@ -3487,7 +3622,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             alignment=self._analysis["alignment"],
             helios_compatibility=self._helios_compatibility,
             overall_passed=overall_passed,
-            num_tests=len(available_tests),
+            num_tests=len(applicable_tests),
             num_assessed=len(passed_tests) + len(failed_tests),
             num_passed=len(passed_tests),
             num_failed=len(failed_tests),
@@ -3507,7 +3642,7 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
             for name, result in data.ct_number.rois.items()
         ]
         high_lines = [
-            f"  {name}: SD={result.std_hu:.2f} HU (reference={result.reference_std_hu}, status={result.status})"
+            f"  {name}: SD={result.std_hu:.2f} HU (reference={result.reference_std_hu}, status={'PASS' if result.passed is True else 'FAIL' if result.passed is False else 'NOT_EVALUATED'})"
             for name, result in data.high_contrast_resolution.rois.items()
         ]
         mtf_lines = [
