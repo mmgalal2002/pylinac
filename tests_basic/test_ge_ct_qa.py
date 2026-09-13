@@ -2,6 +2,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 import pydicom
@@ -11,9 +12,13 @@ from pydicom.uid import ExplicitVRLittleEndian, generate_uid
 
 from pylinac import GECTQA
 from pylinac.ge_ct_qa import (
+    GE_HELIOS_CT,
+    GE_LIGHTSPEED16,
+    GE_OPTIMA_CT,
     GECTQAROI,
     GECTQAConfig,
     GECTQAMaterialROI,
+    GECTQASliceThicknessConfig,
 )
 
 
@@ -22,14 +27,13 @@ def write_ct_image(
     instance_number: int,
     series_uid: str,
     include_material: bool = False,
+    manufacturer_model_name: str = "Synthetic GE CT",
 ) -> None:
     file_meta = FileMetaDataset()
     file_meta.MediaStorageSOPClassUID = pydicom.uid.CTImageStorage
     file_meta.MediaStorageSOPInstanceUID = generate_uid()
     file_meta.TransferSyntaxUID = ExplicitVRLittleEndian
-    dataset = FileDataset(
-        str(filename), {}, file_meta=file_meta, preamble=b"\0" * 128
-    )
+    dataset = FileDataset(str(filename), {}, file_meta=file_meta, preamble=b"\0" * 128)
     dataset.is_little_endian = True
     dataset.is_implicit_VR = False
     dataset.Modality = "CT"
@@ -45,7 +49,7 @@ def write_ct_image(
     dataset.InstanceNumber = instance_number
     dataset.SliceThickness = 2.5
     dataset.Manufacturer = "GE MEDICAL SYSTEMS"
-    dataset.ManufacturerModelName = "Synthetic GE CT"
+    dataset.ManufacturerModelName = manufacturer_model_name
     dataset.RescaleSlope = 1.0
     dataset.RescaleIntercept = -1000.0
     dataset.PhotometricInterpretation = "MONOCHROME2"
@@ -131,6 +135,116 @@ class TestGECTQA(TestCase):
         self.assertTrue(data.helios_compatibility.available)
         self.assertIsNotNone(data.helios_compatibility.high_contrast)
         self.assertEqual(data.slice_thickness.acquired_slice_thickness_mm, 2.5)
+
+    def test_lightspeed16_is_detected_without_claiming_optima_or_helios(self) -> None:
+        for path in self.folder.glob("slice_*.dcm"):
+            dataset = pydicom.dcmread(path)
+            dataset.ManufacturerModelName = "LightSpeed16"
+            dataset.save_as(path)
+
+        qa = GECTQA(self.folder)
+        self.assertEqual(qa.profile_selection.scanner_id, GE_LIGHTSPEED16)
+        self.assertEqual(qa.profile_selection.phantom_id, "GE_20CM_QA_PHANTOM")
+        self.assertEqual(qa.profile_selection.scanner_source, "dicom")
+        qa.analyze(angle_override=0)
+        data = qa.results_data()
+        self.assertEqual(data.configuration.scanner_id, GE_LIGHTSPEED16)
+        self.assertEqual(data.configuration.scanner_display_name, "GE LightSpeed16")
+        self.assertEqual(data.reference.reference_scope, "shared_ge_reference")
+        self.assertNotIn("GE Optima", data.configuration.scanner_display_name)
+        self.assertNotIn("GE Helios", data.configuration.scanner_display_name)
+
+    def test_unknown_scanner_uses_generic_fallback(self) -> None:
+        with self.assertWarnsRegex(UserWarning, "Unknown scanner model"):
+            qa = GECTQA(self.folder)
+        self.assertEqual(qa.profile_selection.scanner_id, "GENERIC_GE_CT")
+        self.assertEqual(qa.profile_selection.scanner_source, "fallback")
+
+    def test_manual_scanner_profiles_are_recorded_as_user_selected(self) -> None:
+        optima = GECTQA(self.folder, scanner_profile=GE_OPTIMA_CT)
+        helios = GECTQA(self.folder, scanner_profile=GE_HELIOS_CT)
+        self.assertEqual(optima.profile_selection.scanner_id, GE_OPTIMA_CT)
+        self.assertEqual(optima.profile_selection.scanner_source, "user")
+        self.assertEqual(helios.profile_selection.scanner_id, GE_HELIOS_CT)
+        self.assertEqual(helios.profile_selection.scanner_source, "user")
+        self.assertEqual(
+            optima.profile_selection.scanner_model_from_dicom, "Synthetic GE CT"
+        )
+
+    def test_missing_plexiglass_reference_is_not_evaluated(self) -> None:
+        config = GECTQAConfig(
+            ct_number_rois={
+                "Plexiglass": GECTQAMaterialROI(x_mm=0, y_mm=0, radius_mm=5),
+            }
+        )
+        qa = GECTQA(self.folder, config=config)
+        qa.analyze(angle_override=0)
+        data = qa.results_data()
+        self.assertEqual(data.ct_number.status, "NOT_EVALUATED")
+        self.assertIn("Plexiglass", data.ct_number.reason)
+        self.assertIsNone(data.reference.plexiglass_water_difference_hu)
+
+    def test_slice_thickness_requires_geometry_and_calibration(self) -> None:
+        config = GECTQAConfig(
+            slice_thickness=GECTQASliceThicknessConfig(
+                roi=GECTQAROI(x_mm=0, y_mm=0, radius_mm=5),
+                nominal_mm=2.5,
+                tolerance_mm=0.5,
+            )
+        )
+        qa = GECTQA(self.folder, config=config)
+        qa.analyze(angle_override=0)
+        result = qa.results_data().slice_thickness
+        self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertIn("insert geometry and calibration", result.reason)
+
+    def test_alignment_is_unavailable_without_dedicated_acquisition(self) -> None:
+        qa = GECTQA(self.folder)
+        qa.analyze(angle_override=0)
+        result = qa.results_data().alignment
+        self.assertEqual(result.status, "UNAVAILABLE")
+        self.assertIn("dedicated alignment acquisition", result.reason)
+
+    def test_mtf_extrapolation_is_classified(self) -> None:
+        class FakeMTF:
+            norm_mtfs = {0.1: 0.3, 0.2: 0.2, 0.3: 0.1}
+
+            @staticmethod
+            def relative_resolution(percentage: int) -> float:
+                return 0.4 - percentage / 1000
+
+        with patch(
+            "pylinac.ge_ct_qa.MTF.from_high_contrast_diskset",
+            return_value=FakeMTF(),
+        ):
+            qa = GECTQA(self.folder)
+            qa.analyze(angle_override=0)
+        result = qa.results_data().high_contrast_resolution.mtf_results
+        self.assertEqual(result["90"].status, "EXTRAPOLATED")
+        self.assertFalse(result["90"].measured_directly)
+        self.assertTrue(result["90"].extrapolated)
+
+    def test_positioning_borderline_failure_reports_excess(self) -> None:
+        config = GECTQAConfig(positioning_tolerance_mm=2.0)
+        qa = GECTQA(self.folder, config=config)
+        qa.analyze(center_override=(129.557, 127.5), angle_override=0)
+        result = qa.results_data().positioning
+        self.assertEqual(result.status, "FAIL")
+        self.assertAlmostEqual(result.excess_mm, 0.057, places=3)
+        self.assertIsNotNone(result.confidence)
+
+    def test_user_override_wins_and_is_traceable(self) -> None:
+        config = GECTQAConfig.from_profile(
+            GE_LIGHTSPEED16,
+            user_overrides={"noise_reference_hu": 9.0},
+        )
+        qa = GECTQA(self.folder, config=config)
+        qa.analyze(angle_override=0)
+        data = qa.results_data()
+        self.assertEqual(data.noise.reference_hu, 9.0)
+        parameter = data.reference.parameters["noise_nominal_hu"]
+        self.assertTrue(parameter.is_user_override)
+        self.assertEqual(data.noise.overrides_used["noise_reference_hu"], 9.0)
 
     def test_single_file_and_zip(self) -> None:
         single = GECTQA(self.folder / "slice_1.dcm")
