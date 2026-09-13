@@ -229,7 +229,10 @@ The typed result is :class:`~pylinac.ge_ct_qa.GECTQAResult`.  It contains
 metadata, public reference values, localization, detected module locations,
 all module result objects, the Helios-compatible comparison block,
 availability/reason text, pass/fail values, warning count, and an overall
-state.  The overall state is:
+state.  The structured JSON retains the complete diagnostic detail.  The
+human-readable ``results()`` output and PDF contain populated measurements and
+evaluated results only; input paths, DICOM UIDs, unset values, and unavailable
+test explanations are intentionally omitted.  The overall state is:
 
 * ``FAIL`` when at least one evaluated test fails;
 * ``INCOMPLETE`` when a required test is unavailable or not evaluated;
