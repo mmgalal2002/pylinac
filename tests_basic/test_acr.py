@@ -123,7 +123,7 @@ class TestUniformityBBDetection(TestCase):
         roi = DiskROI(array=array, radius=radius, center=center)
         return self.module._find_bb_centroid(roi=roi)
 
-    def test_clear_bb_weighted_centroid(self):
+    def test_clear_bb_centroid_weighted(self):
         array = np.zeros((50, 50), dtype=float)
         array[25, 25] = 20
         array[25, 26] = 15
