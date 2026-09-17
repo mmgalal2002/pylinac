@@ -651,7 +651,7 @@ def sinusoidal_fit(theta: float, a: float, b: float, c: float, phi: float) -> fl
     return a + b * np.sin(c * theta + phi)
 
 
-def weighted_centroid_3d(arr: np.ndarray) -> tuple[float, float, float] | None:
+def centroid_weighted_3d(arr: np.ndarray) -> tuple[float, float, float] | None:
     if np.sum(arr) == 0:
         return None  # Avoid division by zero
 
@@ -755,7 +755,7 @@ class TomographicResolution(ResultsDataMixin[TomographicResolutionResults], Quaa
         and that position"""
         # find the weighted centroid of the stack in 3D
         array_3d = self.stack.as_3d_array()
-        x, y, z = weighted_centroid_3d(array_3d)
+        x, y, z = centroid_weighted_3d(array_3d)
         # the slice at the z-location will give the x/y resolution
         xy_frame = self.stack.frames[int(round(z))]
         p = xy_frame.compute(WeightedCentroid())
