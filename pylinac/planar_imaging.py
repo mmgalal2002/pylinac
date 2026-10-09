@@ -28,8 +28,9 @@ import math
 import os.path as osp
 import warnings
 import webbrowser
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Callable, Generator, Iterator, Sequence
 from functools import cached_property
+from numbers import Real
 from pathlib import Path
 from typing import BinaryIO, Literal
 
@@ -40,6 +41,7 @@ from plotly.subplots import make_subplots
 from py_linq import Enumerable
 from pydantic import Field
 from scipy.ndimage import median_filter
+from scipy.optimize import linear_sum_assignment
 from skimage import exposure, feature, filters, measure, morphology, transform
 from skimage.measure._regionprops import RegionProperties
 from typing_extensions import override
@@ -50,7 +52,7 @@ from .core.contrast import Contrast
 from .core.decorators import lru_cache
 from .core.geometry import Circle, Point, Rectangle, Vector
 from .core.io import get_url, retrieve_demo_file
-from .core.mtf import MTF
+from .core.mtf import MTF, format_resolution
 from .core.plotly_utils import add_title
 from .core.profile import CollapsedCircleProfile, FWXMProfilePhysical
 from .core.roi import (
@@ -95,8 +97,9 @@ class PlanarResult(ResultBase):
         description="The area of the phantom in mm^2. This is an approximation. It calculates the area of a perfect, similar shape (circle, square) that fits the phantom.",
         title="Phantom Area (mm^2)",
     )
-    mtf_lp_mm: tuple[float, float, float] | None = Field(
-        description="The % MTF values in lp/mm.", default=None
+    mtf_lp_mm: list[dict[int, float | None]] | None = Field(
+        description="The % MTF values in lp/mm. Percentage values are None when the requested percentage is outside the measured MTF range; the entire field is None when no MTF is measured.",
+        default=None,
     )
     percent_integral_uniformity: float | None = Field(
         description="The percent integral uniformity of the image.",
@@ -979,9 +982,9 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
             ]
         if self.high_contrast_rois:
             text += [
-                f"MTF 80% (lp/mm): {self.mtf.relative_resolution(80):2.2f}",
-                f"MTF 50% (lp/mm): {self.mtf.relative_resolution(50):2.2f}",
-                f"MTF 30% (lp/mm): {self.mtf.relative_resolution(30):2.2f}",
+                f"MTF 80% (lp/mm): {format_resolution(self.mtf.relative_resolution(80))}",
+                f"MTF 50% (lp/mm): {format_resolution(self.mtf.relative_resolution(50))}",
+                f"MTF 30% (lp/mm): {format_resolution(self.mtf.relative_resolution(30))}",
             ]
         if not as_list:
             text = "\n".join(text)
@@ -1196,6 +1199,10 @@ class LightRadResult(ResultBase):
         description="The offset of the field center from the BB center in the y-direction/inplane in mm.",
         title="Field->BB Y offset (mm)",
     )
+    bb_detection_method: Literal["automatic", "manual"] = Field(
+        description="Whether the BB positions were detected automatically or supplied by the user.",
+        title="BB detection method",
+    )
 
 
 class ACRDigitalMammographyResult(ResultBase):
@@ -1239,6 +1246,7 @@ class ACRDigitalMammographyResult(ResultBase):
 class StandardImagingFC2(ImagePhantomBase):
     common_name = "SI FC-2"
     _demo_filename = "fc2.dcm"
+    expected_bb_count = 4
     # these positions are the offset in mm from the center of the image to the nominal position of the BBs
     bb_positions_10x10 = {
         "TL": [-40, -40],
@@ -1258,6 +1266,8 @@ class StandardImagingFC2(ImagePhantomBase):
     bb_edge_threshold_mm: float
     kernel_size_multiplier: float
     bb_centers: dict[str, Point]
+    _manual_bb_points: list[Point] | None
+    bb_detection_method: Literal["automatic", "manual"]
 
     @staticmethod
     def run_demo() -> None:
@@ -1272,6 +1282,7 @@ class StandardImagingFC2(ImagePhantomBase):
         fwxm: int = 50,
         bb_edge_threshold_mm: float = 10,
         kernel_size_multiplier: float = 2.0,
+        bb_points: Sequence[Point | Sequence[float]] | None = None,
     ) -> None:
         """Analyze the FC-2 phantom to find the BBs and the open field and compare to each other as well as the EPID.
 
@@ -1290,7 +1301,15 @@ class StandardImagingFC2(ImagePhantomBase):
             Multiplier for the kernel size used in adaptive histogram equalization when detecting BBs near the edge.
             The kernel size is calculated as ``bb_radius_px * kernel_size_multiplier``. Default is 2.0.
             Lower values (e.g., 1.0) may help detect BBs that are very close to the field edge.
+        bb_points : sequence of Point or two-element numeric sequences, optional
+            User-selected BB centers in zero-based image pixels (X right, Y down).
+            Supply exactly ``expected_bb_count`` distinct points in any order. If
+            omitted, BB centers are detected automatically.
         """
+        self._manual_bb_points = self._validate_bb_points(bb_points)
+        self.bb_detection_method = (
+            "manual" if self._manual_bb_points is not None else "automatic"
+        )
         self.bb_edge_threshold_mm = bb_edge_threshold_mm
         self.kernel_size_multiplier = kernel_size_multiplier
         self._check_inversion()
@@ -1314,6 +1333,7 @@ class StandardImagingFC2(ImagePhantomBase):
             f"The crossplane field was {self.field_epid_offset_mm.x:2.1f}mm from the EPID CAX",
             f"The inplane field was {self.field_bb_offset_mm.y:2.1f}mm from the BB inplane center",
             f"The crossplane field was {self.field_bb_offset_mm.x:2.1f}mm from the BB crossplane center",
+            f"BB detection method: {self.bb_detection_method}",
         ]
         if as_list:
             return text
@@ -1342,6 +1362,7 @@ class StandardImagingFC2(ImagePhantomBase):
             field_epid_offset_y_mm=self.field_epid_offset_mm.y,
             field_bb_offset_x_mm=self.field_bb_offset_mm.x,
             field_bb_offset_y_mm=self.field_bb_offset_mm.y,
+            bb_detection_method=self.bb_detection_method,
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -1418,11 +1439,75 @@ class StandardImagingFC2(ImagePhantomBase):
         return Point(x=x, y=y), field_width_x, field_width_y
 
     def _find_overall_bb_centroid(self, fwxm: int) -> Point:
-        """Determine the geometric center of the 4 BBs"""
-        self.bb_centers = bb_centers = self._detect_bb_centers(fwxm)
+        """Determine the geometric center of the BBs."""
+        self.bb_centers = bb_centers = self._get_bb_centers(fwxm)
         central_x = np.mean([p.x for p in bb_centers.values()])
         central_y = np.mean([p.y for p in bb_centers.values()])
         return Point(x=central_x, y=central_y)
+
+    def _validate_bb_points(
+        self, bb_points: Sequence[Point | Sequence[float]] | None
+    ) -> list[Point] | None:
+        """Validate user-selected BB positions before analyzing the image."""
+        if bb_points is None:
+            return None
+        if not isinstance(bb_points, Sequence) or isinstance(bb_points, (str, bytes)):
+            raise ValueError("bb_points must be a sequence of points.")
+        if len(bb_points) != self.expected_bb_count:
+            raise ValueError(
+                f"Expected {self.expected_bb_count} BB points; got {len(bb_points)}."
+            )
+        height, width = self.image.array.shape
+        points = []
+        for value in bb_points:
+            if isinstance(value, Point):
+                coordinates = (value.x, value.y)
+            elif isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+                if len(value) != 2:
+                    raise ValueError("Each BB point must have exactly two coordinates.")
+                coordinates = value
+            else:
+                raise ValueError("Each BB point must be a Point or an (x, y) pair.")
+            x, y = coordinates
+            if (
+                not isinstance(x, Real)
+                or isinstance(x, bool)
+                or not isinstance(y, Real)
+                or isinstance(y, bool)
+                or not math.isfinite(x)
+                or not math.isfinite(y)
+                or not (0 <= x < width and 0 <= y < height)
+            ):
+                raise ValueError("BB coordinates must be finite and within the image.")
+            points.append(Point(float(x), float(y)))
+        if len({(point.x, point.y) for point in points}) != len(points):
+            raise ValueError("BB points must be distinct.")
+        return points
+
+    def _get_bb_centers(self, fwxm: int) -> dict[str, Point]:
+        """Use supplied BB positions or detect them from the image."""
+        # automatic short-circuit
+        if self._manual_bb_points is None:
+            return self._detect_bb_centers(fwxm)
+        # sorting of manual inputs
+        nominal_positions = self._determine_bb_set(fwxm)
+        labels = list(nominal_positions)
+        nominal = np.array(list(nominal_positions.values()), dtype=float)
+        selected = np.array(
+            [(point.x, point.y) for point in self._manual_bb_points], dtype=float
+        )
+        # Remove translation before matching so order and phantom offset do not matter.
+        nominal = (nominal - nominal.mean(axis=0)) * self.image.dpmm
+        selected = selected - selected.mean(axis=0)
+        distances = np.linalg.norm(
+            nominal[:, np.newaxis, :] - selected[np.newaxis, :, :], axis=2
+        )
+        # perform assignment from nominal to closest manual
+        label_indices, point_indices = linear_sum_assignment(distances)
+        return {
+            labels[label_index]: self._manual_bb_points[point_index]
+            for label_index, point_index in zip(label_indices, point_indices)
+        }
 
     def _detect_bb_centers(self, fwxm: int) -> dict:
         """Sample a 10x10mm square about each BB to detect it. Adjustable using self.bb_sampling_box_size_mm"""
@@ -1450,6 +1535,7 @@ class StandardImagingFC2(ImagePhantomBase):
             # now find the weighted centroid of the BB
             points = self.image.compute(
                 SizedDiskLocator.from_center_physical(
+                    name=f"BB {key}",
                     expected_position_mm=position,
                     search_window_mm=(
                         self.bb_sampling_box_size_mm,
@@ -1476,6 +1562,114 @@ class StandardImagingFC2(ImagePhantomBase):
         else:
             return self.bb_positions_10x10
 
+    def plotly_analyzed_images(
+        self,
+        show: bool = True,
+        show_legend: bool = True,
+        show_colorbar: bool = True,
+        show_roi_labels: bool = False,
+        roi_label_font_size: float = 10,
+        **kwargs,
+    ) -> dict[str, go.Figure]:
+        """Plot the light/radiation image, BBs, and center crosshairs using Plotly.
+
+        Parameters
+        ----------
+        show : bool
+            Whether to display the figure.
+        show_legend : bool
+            Whether to display the legend. Each detected BB has one entry
+            controlling both its boundary and center marker.
+        show_colorbar : bool
+            Whether to display the image colorbar.
+        show_roi_labels : bool
+            Whether to label BB centers on the image.
+        roi_label_font_size : float
+            Font size of BB labels in display units.
+        kwargs
+            Additional keyword arguments passed to
+            :meth:`~pylinac.core.image.BaseImage.plotly`.
+
+        Returns
+        -------
+        dict[str, plotly.graph_objects.Figure]
+            The analyzed figure under the ``"Image"`` key. The green BB
+            centroid, blue EPID center, and red field center match the
+            crosshairs in :meth:`plot_analyzed_image`. Manually selected BBs
+            are shown as green crosses.
+        """
+        show_metrics = kwargs.pop("show_metrics", True)
+        fig = self.image.plotly(
+            show=False,
+            show_metrics=False,
+            title=f"{self.common_name} Phantom Analysis",
+            show_colorbar=show_colorbar,
+            show_legend=show_legend,
+            **kwargs,
+        )
+        if self.bb_detection_method == "automatic":
+            metrics = self.image.metrics if show_metrics else []
+            for metric in metrics:
+                first_trace = len(fig.data)
+                metric.plotly(
+                    fig, color="green", showlegend=show_legend, legendgroup=metric.name
+                )
+                for trace in fig.data[first_trace:]:
+                    if trace.name.endswith(" Boundary"):
+                        trace.showlegend = False
+                    elif show_roi_labels:
+                        trace.mode = "markers+text"
+                        trace.text = [metric.name] * len(trace.x)
+                        trace.textposition = "top left"
+                        trace.textfont.size = roi_label_font_size
+        else:
+            bb_centers = {
+                label: point
+                for label, point in self.bb_centers.items()
+                if label != "Virtual Center"
+            }
+            fig.add_scatter(
+                x=[point.x for point in bb_centers.values()],
+                y=[point.y for point in bb_centers.values()],
+                mode="markers+text" if show_roi_labels else "markers",
+                marker=dict(color="green", symbol="x", size=10),
+                text=list(bb_centers) if show_roi_labels else None,
+                textposition="top left",
+                textfont_size=roi_label_font_size,
+                name="Manual BB Locations",
+                showlegend=show_legend,
+            )
+
+        height, width = self.image.shape
+        for name, center, color, inset in (
+            ("BB Centroid", self.bb_center, "green", 0.25),
+            ("EPID Center", self.epid_center, "blue", 0),
+            ("Field Center", self.field_center, "red", 0.15),
+        ):
+            fig.add_scatter(
+                x=[
+                    width * inset - 0.5,
+                    width * (1 - inset) - 0.5,
+                    None,
+                    center.x,
+                    center.x,
+                ],
+                y=[
+                    center.y,
+                    center.y,
+                    None,
+                    height * inset - 0.5,
+                    height * (1 - inset) - 0.5,
+                ],
+                mode="lines",
+                line=dict(color=color),
+                name=name,
+                showlegend=show_legend,
+            )
+        if show:
+            fig.show()
+        return {"Image": fig}
+
     def plot_analyzed_image(
         self, show: bool = True, **kwargs
     ) -> tuple[list[plt.Figure], list[str]]:
@@ -1493,6 +1687,9 @@ class StandardImagingFC2(ImagePhantomBase):
         fig, axes = plt.subplots(1)
         figs.append(fig)
         names.append("image")
+        # for automatically-found BBs, this will plot them as they are
+        # considered "metrics". Manual BB locations are not "metrics"
+        # and are plotted explicitly below.
         self.image.plot(ax=axes, show=False, metric_kwargs={"color": "g"}, **kwargs)
         axes.axis("off")
         axes.set_title(f"{self.common_name} Phantom Analysis")
@@ -1516,6 +1713,24 @@ class StandardImagingFC2(ImagePhantomBase):
             label="Field Center",
         )
         axes.axvline(x=self.field_center.x, ymin=0.15, ymax=0.85, color="red")
+
+        # show the manually-selected BBs.
+        if self.bb_detection_method == "manual":
+            bb_centers = [
+                point
+                for label, point in self.bb_centers.items()
+                if label != "Virtual Center"
+            ]
+            axes.scatter(
+                [point.x for point in bb_centers],
+                [point.y for point in bb_centers],
+                s=50,
+                c="green",
+                linewidths=1.5,
+                label="Manual BB Locations",
+                zorder=5,
+                marker="x",
+            )
 
         axes.legend()
 
@@ -1628,6 +1843,7 @@ class IMTLRad(StandardImagingFC2):
 
     common_name = "IMT L-Rad"
     _demo_filename = "imtlrad.dcm"
+    expected_bb_count = 1
     center_only_bb = {"Center": [0, 0]}
     bb_sampling_box_size_mm = 12
     field_strip_width_mm = 5
@@ -1643,6 +1859,7 @@ class DoselabRLf(StandardImagingFC2):
 
     common_name = "Doselab RLf"
     _demo_filename = "Doselab_RLf.dcm"
+    expected_bb_count = 4
     # these positions are the offset in mm from the center of the image to the nominal position of the BBs
     bb_positions_10x10 = {
         "TL": [-17, -45],
@@ -1675,6 +1892,7 @@ class IsoAlign(StandardImagingFC2):
 
     common_name = "PTW Iso-Align"
     _demo_filename = "ptw_isoalign.dcm"
+    expected_bb_count = 5
     # these positions are the offset in mm from the center of the image to the nominal position of the BBs
     bb_positions = {
         "Center": [0, 0],
@@ -1708,6 +1926,7 @@ class SNCFSQA(StandardImagingFC2):
 
     common_name = "SNC FSQA"
     _demo_filename = "FSQA_15x15.dcm"
+    expected_bb_count = 1
     center_only_bb = {"TR": [40, -40]}
     # bb_sampling_box_size_mm = 8
     field_strip_width_mm = 5
@@ -1716,9 +1935,9 @@ class SNCFSQA(StandardImagingFC2):
         return self.center_only_bb
 
     def _find_overall_bb_centroid(self, fwxm: int) -> Point:
-        """Determine the geometric center of the 4 BBs"""
+        """Derive the virtual center from the upper-right BB."""
         # detect the upper right BB
-        self.bb_centers = self._detect_bb_centers(fwxm)
+        self.bb_centers = self._get_bb_centers(fwxm)
         # add another virtual bb at the center of the phantom, knowing it's offset by 4cm in each direction
         self.bb_centers["Virtual Center"] = self.bb_centers["TR"] - Point(
             40 * self.image.dpmm, -40 * self.image.dpmm

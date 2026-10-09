@@ -1054,6 +1054,7 @@ Standard Imaging FC-2
 ---------------------
 
 The FC-2 phantom is for testing light/radiation coincidence.
+See :ref:`manual-planar-bb-selection` if automatic BB detection is not suitable.
 
 
 Image Acquisition
@@ -1099,7 +1100,6 @@ The algorithm works like such:
 * **Comparing centroids** -- The irradiated field centroid is compared to the EPID/image center as well as the the BB centroid.
   The field size is also reported.
 
-
 .. _doselab_rlf:
 
 Doselab RLf
@@ -1108,6 +1108,7 @@ Doselab RLf
 .. versionadded:: 3.15
 
 The Doselab RLf is for testing light/radiation coincidence. See also :class:`~pylinac.planar_imaging.DoselabRLf`.
+See :ref:`manual-planar-bb-selection` if automatic BB detection is not suitable.
 
 Image Acquisition
 ^^^^^^^^^^^^^^^^^
@@ -1161,6 +1162,7 @@ IsoAlign
 .. versionadded:: 3.15
 
 The IsoAlign phantom is for testing light/radiation coincidence. See also :class:`~pylinac.planar_imaging.IsoAlign`.
+See :ref:`manual-planar-bb-selection` if automatic BB detection is not suitable.
 
 Image Acquisition
 ^^^^^^^^^^^^^^^^^
@@ -1210,6 +1212,7 @@ IMT L-Rad
 The IMT L-Rad phantom is for testing light/radiation coincidence. Unlike the FC-2 phantom, the L-Rad's BBs are
 all the way at the edge of the phantom. This means for any size below 20x20cm those BBs can't be seen. Even at
 20x20, the field edge partially obscures the BBs. For this reason, we only use the central BB for detection.
+See :ref:`manual-planar-bb-selection` if automatic BB detection is not suitable.
 
 Image Acquisition
 ^^^^^^^^^^^^^^^^^
@@ -1260,6 +1263,7 @@ of the image. Because of both :ref:`the philosophy <light-rad-philosophy>` of py
 there is no interaction to find the edge markers. Instead, we use the one offset BB and then offset that point back
 4cm in each direction to get a "virtual center". This center is compared to the field center and EPID center.
 The expectation is that the physicist set up their field to the markers using the light field at the time of acquisition.
+See :ref:`manual-planar-bb-selection` if automatic BB detection is not suitable.
 
 Image Acquisition
 ^^^^^^^^^^^^^^^^^
@@ -1388,7 +1392,10 @@ The results from phantoms that are meant to measure image quality, contrast, etc
   score above the passed threshold. See :ref:`visibility` for more.
 * ``phantom_center_x_y``: The center of the phantom in the image in pixels.
 * ``phantom_area``: The area of the phantom in pixels^2.
-* ``mtf_lp_mm``: The 80%, 50%, and 30% MTF values in lp/mm. For more values see: :ref:`calculate-specific-mtf`.
+* ``mtf_lp_mm``: The 90% through 10% MTF values in lp/mm, in descending steps of 10%,
+  stored as a list of single-key dictionaries. Each percentage value is ``None``
+  if that percentage lies outside the measured rMTF range. See :ref:`peak-valley-mtf` and
+  :ref:`calculate-specific-mtf`.
 * ``percent_integral_uniformity``: The percent integral uniformity of the image. See :ref:`planar-piu`.
 * ``low_contrast_rois``: A dictionary of the individual low contrast ROIs. The dictionary keys
   are the ROI number, starting at 0. Each ROI has the following information:
@@ -1621,6 +1628,37 @@ and methods, the plotting and PDF report functionality comes for free.
 
 Usage tips, tweaks, & troubleshooting
 -------------------------------------
+
+.. _manual-planar-bb-selection:
+
+Manual BB selection
+^^^^^^^^^^^^^^^^^^^
+
+The light/radiation phantoms can use manually selected BB centers when automatic BB detection fails or is
+not optimal.
+Pass all BB centers to ``analyze(bb_points=...)`` as ``(x, y)`` pixel coordinates or
+:class:`~pylinac.core.geometry.Point` objects. Coordinates are :ref:`Screen-oriented <image-coordinate-system>`.
+The points may be in any order. If ``bb_points`` is omitted, the
+usual automatic BB detection is used.
+
+The number of points must match the phantom's ``expected_bb_count`` class attribute:
+
+* Standard Imaging FC-2 and Doselab RLf: 4 points each.
+* PTW Iso-Align: 5 points.
+* IMT L-Rad and SNC FSQA: 1 point each.
+
+For example:
+
+.. code-block:: python
+
+    from pylinac import StandardImagingFC2
+
+    phantom = StandardImagingFC2("fc2.dcm")
+    phantom.analyze(bb_points=[(520, 460), (640, 460), (520, 580), (640, 580)])
+    print(phantom.results_data().bb_detection_method)  # "manual"
+
+The field is measured in the same way for manual and automatic BB selection. The text results and
+``results_data().bb_detection_method`` report which method was used.
 
 .. _fine-tuning-planar:
 

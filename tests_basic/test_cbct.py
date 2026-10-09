@@ -19,7 +19,13 @@ from pylinac.core.image import (
     LazyZipDicomImageStack,
 )
 from pylinac.core.io import TemporaryZipDirectory
-from pylinac.ct import CTP404CP503, CTP404CP504, CTP528CP503, CTP528CP504, CatphanResult
+from pylinac.ct import (
+    CTP404CP503,
+    CTP404CP504,
+    CTP528CP503,
+    CTP528CP504,
+    CatphanResult,
+)
 from tests_basic.core.test_utilities import QuaacTestBase, ResultsDataBase
 from tests_basic.utils import (
     CloudFileMixin,
@@ -36,6 +42,93 @@ from tests_basic.utils import (
 TEST_DIR = "CBCT"
 
 get_folder_from_cloud_repo([TEST_DIR])
+
+
+class TestPhysicalScanExtent(TestCase):
+    tolerance_mm = 0.5
+
+    def setUp(self):
+        self.cbct = CatPhan504.from_demo_images()
+        self.cbct.origin_slice = 0
+        origin = self.cbct.dicom_stack[0].z_position
+        # Use a zero origin so exact tolerance tests avoid subtraction roundoff.
+        for image, metadata in zip(
+            self.cbct.dicom_stack, self.cbct.dicom_stack.metadatas
+        ):
+            position = image.z_position - origin
+            image.metadata.ImagePositionPatient[-1] = position
+            metadata.ImagePositionPatient[-1] = position
+        positions = [image.z_position for image in self.cbct.dicom_stack]
+        self.cbct.modules = {
+            CTP404CP504: {"offset": min(positions)},
+            CTP528CP504: {"offset": max(positions)},
+        }
+
+    def test_exact_coverage(self):
+        self.assertTrue(self.cbct._ensure_physical_scan_extent())
+
+    def test_near_side_within_tolerance(self):
+        self.cbct.modules[CTP404CP504]["offset"] -= self.tolerance_mm - 0.01
+        self.assertTrue(self.cbct._ensure_physical_scan_extent())
+
+    def test_near_side_at_tolerance(self):
+        self.cbct.modules[CTP404CP504]["offset"] -= self.tolerance_mm
+        self.assertTrue(self.cbct._ensure_physical_scan_extent())
+
+    def test_near_side_outside_tolerance(self):
+        self.cbct.modules[CTP404CP504]["offset"] -= self.tolerance_mm + 0.001
+        self.assertFalse(self.cbct._ensure_physical_scan_extent())
+
+    def test_far_side_within_tolerance(self):
+        self.cbct.modules[CTP528CP504]["offset"] += self.tolerance_mm - 0.01
+        self.assertTrue(self.cbct._ensure_physical_scan_extent())
+
+    def test_far_side_at_tolerance(self):
+        self.cbct.modules[CTP528CP504]["offset"] += self.tolerance_mm
+        self.assertTrue(self.cbct._ensure_physical_scan_extent())
+
+    def test_far_side_outside_tolerance(self):
+        self.cbct.modules[CTP528CP504]["offset"] += self.tolerance_mm + 0.001
+        self.assertFalse(self.cbct._ensure_physical_scan_extent())
+
+    def test_tolerance_across_rounding_boundaries(self):
+        self.cbct.modules[CTP404CP504]["offset"] -= 0.002
+        self.cbct.modules[CTP528CP504]["offset"] += 0.002
+        for shift in (0.049, 0.002, -1000):
+            for image, metadata in zip(
+                self.cbct.dicom_stack, self.cbct.dicom_stack.metadatas
+            ):
+                position = image.z_position + shift
+                image.metadata.ImagePositionPatient[-1] = position
+                metadata.ImagePositionPatient[-1] = position
+            self.assertTrue(self.cbct._ensure_physical_scan_extent())
+
+    def test_missing_terminal_slice(self):
+        del self.cbct.dicom_stack[-1]
+        del self.cbct.dicom_stack.metadatas[-1]
+        self.assertFalse(self.cbct._ensure_physical_scan_extent())
+
+
+class TestPhysicalScanExtentThinSlices(TestPhysicalScanExtent):
+    slice_spacing_mm = 0.5
+    tolerance_mm = 0.25
+
+    def setUp(self):
+        super().setUp()
+        for index, (image, metadata) in enumerate(
+            zip(self.cbct.dicom_stack, self.cbct.dicom_stack.metadatas)
+        ):
+            position = index * self.slice_spacing_mm
+            image.metadata.ImagePositionPatient[-1] = position
+            metadata.ImagePositionPatient[-1] = position
+        self.cbct.modules[CTP528CP504]["offset"] = (
+            len(self.cbct.dicom_stack) - 1
+        ) * self.slice_spacing_mm
+
+
+class TestPhysicalScanExtentVeryThinSlices(TestPhysicalScanExtentThinSlices):
+    slice_spacing_mm = 0.25
+    tolerance_mm = 0.125
 
 
 class TestInstantiation(
@@ -435,6 +528,7 @@ class CatPhanMixin(CloudFileMixin):
     angle_adjustment: float = 0
     roi_size_factor: float = 1
     scaling_factor: float = 1
+    z_flip: bool = False
 
     @classmethod
     def setUpClass(cls):
@@ -445,6 +539,8 @@ class CatPhanMixin(CloudFileMixin):
             )
         else:
             cls.cbct = cls.catphan(filename, memory_efficient_mode=cls.memory_efficient)
+        if cls.z_flip:
+            cls.cbct.dicom_stack.z_flip()
         # set HU origin variance if needed
         if cls.hu_origin_variance is not None:
             cls.cbct.hu_origin_slice_variance = cls.hu_origin_variance
@@ -657,7 +753,7 @@ class CatPhan600_2(CatPhanMixin, TestCase):
     }
     hu_passed = False
     unif_values = {"Center": 14, "Left": 15, "Right": 15, "Top": 16, "Bottom": 13}
-    mtf_values = {50: 0.4}
+    mtf_values = {80: 0.293}
     avg_line_length = 50.02
     slice_thickness = 4.5
     lowcon_visible = 2  # changed w/ visibility refactor in v3.0
@@ -814,6 +910,19 @@ class CatPhan604Mixin(CatPhanMixin):
 class CatPhan700Mixin(CatPhanMixin):
     catphan = CatPhan700
     dir_path = [TEST_DIR, "CatPhan_700"]
+
+
+class TestCatPhan604ZFlip(CatPhan604Mixin, TestCase):
+    file_name = "flipped_catphan604.zip"
+    z_flip = True
+    origin_slice = 63
+    hu_values = {
+        "Air": -1000,
+        "PMP": -199,
+        "Acrylic": 109,
+        "Teflon": 939.5,
+    }
+    mtf_values = {80: 0.2175}
 
 
 class VarianPelvis(CatPhan504Mixin, TestCase):
@@ -1466,7 +1575,7 @@ class AGElekta2(CatPhan503Mixin, TestCase):
         "LDPE": 722,
     }
     unif_values = {"Center": 707, "Left": 758, "Right": 748, "Top": 750, "Bottom": 758}
-    mtf_values = {50: 0.22}
+    mtf_values = {80: 0.170}
     slice_thickness = 1
 
 
@@ -2066,7 +2175,7 @@ class CatPhan503Nodes2(CatPhan503Mixin, TestCase):
     }
     expected_roll = 0.447
     unif_values = {"Center": 162, "Left": -10, "Right": 101, "Top": 44, "Bottom": 39}
-    mtf_values = {50: 0.15}  # TODO: RAM-4472
+    mtf_values = {80: 0.248}  # TODO: RAM-4472
     lowcon_visible = 4
     slice_thickness = 0.49
 

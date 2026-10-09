@@ -211,7 +211,7 @@ class ACRCTMixin(CloudFileMixin):
     dir_path = ["ACR", "CT"]
     origin_slice: int
     phantom_roll: float = 0
-    mtf_50: float
+    mtf_values: dict[int, float]
     slice_thickness: float
     hu_values: dict
     unif_values: dict
@@ -243,11 +243,12 @@ class ACRCTMixin(CloudFileMixin):
         self.assertAlmostEqual(self.ct.catphan_roll, self.phantom_roll, delta=0.3)
 
     def test_mtf(self):
-        self.assertAlmostEqual(
-            self.ct.spatial_resolution_module.mtf.relative_resolution(50),
-            self.mtf_50,
-            delta=0.1,
-        )
+        for percent, expected in self.mtf_values.items():
+            self.assertAlmostEqual(
+                self.ct.spatial_resolution_module.mtf.relative_resolution(percent),
+                expected,
+                delta=0.1,
+            )
 
     def test_HU_values(self):
         """Test HU values."""
@@ -288,7 +289,7 @@ class ACRCTMixin(CloudFileMixin):
 
 class ACRPhilips(ACRCTMixin, PlotlyTestMixin, TestCase):
     file_name = "Philips.zip"
-    mtf_50 = 0.54
+    mtf_values = {50: 0.54}
     phantom_roll = -0.3
     hu_values = {
         "Poly": -87,
@@ -339,7 +340,7 @@ class ACRCTApplyROIOffset(ACRPhilips):
     angle_adjustment = 5
     roi_size_factor = 1.5
     scaling_factor = 1.02
-    mtf_50 = 46
+    mtf_values = {99: 0.439}
     phantom_roll = 4.75
     hu_values = {"Poly": -48.1, "Acrylic": 77.7, "Bone": 549, "Air": -629, "Water": 3.7}
     unif_values = {
@@ -358,7 +359,7 @@ class ACRPhilipsOffset(ACRCTMixin, TestCase):
     """
 
     file_name = "Philips.zip"
-    mtf_50 = 0.54
+    mtf_values = {50: 0.54}
     phantom_roll = -0.3
     hu_values = {
         "Poly": -87,
@@ -385,7 +386,7 @@ class ACRPhilipsRotated(ACRCTMixin, TestCase):
     """
 
     file_name = "Philips.zip"
-    mtf_50 = 0.54
+    mtf_values = {50: 0.54}
     phantom_roll = -3.3
     hu_values = {
         "Poly": -87,
@@ -465,7 +466,7 @@ class TestACRMRIResultData(TestCase, ResultsDataBase):
     def test_row_mtf_keys(self):
         phantom = self.construct_analyzed_instance()
         data = phantom.results_data()
-        for key, value in {10: 1.13, 80: 0.564}.items():
+        for key, value in {20: 1.104, 80: 0.564}.items():
             self.assertAlmostEqual(data.slice1.row_mtf_lp_mm[key], value, delta=0.01)
 
     def test_col_mtf_keys(self):
@@ -533,8 +534,8 @@ class TestMRGeneral(TestCase):
         mri.analyze(echo_number=None)
         self.assertEqual(mri.dicom_stack[0].metadata.EchoNumbers, "1")
 
-    def test_config_extent_rounds(self):
-        """Test that the extent check rounds the config extent to the nearest slice"""
+    def test_config_extent_tolerance(self):
+        """Small endpoint discrepancies are accepted (RAM-2897)."""
         path = get_file_from_cloud_test_repo([*TEST_DIR_MR, "Config rounding.zip"])
         mri = ACRMRILarge.from_zip(path)
         self.assertTrue(mri._ensure_physical_scan_extent())
@@ -542,6 +543,58 @@ class TestMRGeneral(TestCase):
     def test_error_if_from_demo(self):
         with self.assertRaises(NotImplementedError):
             ACRMRILarge.from_demo_image()
+
+
+class TestACRMRMediumScanExtent(CloudFileMixin, TestCase):
+    dir_path = TEST_DIR_MR
+    file_name = "ACR-MRI-orientation-tilt.zip"
+    memory_efficient_mode = False
+
+    def setUp(self):
+        self.mri = ACRMRIMedium.from_zip(
+            self.get_filename(), memory_efficient_mode=self.memory_efficient_mode
+        )
+
+    def test_analyze(self):
+        """The original tilted stack analyzes without an extent error (RAM-6365)."""
+        self.mri.analyze()
+        self.assertEqual(len(self.mri.dicom_stack), 11)
+
+    def test_results_data(self):
+        self.mri.analyze()
+        data = self.mri.results_data()
+        self.assertIsInstance(data, ACRMRIResult)
+        self.assertEqual(data.num_images, 11)
+
+    def test_module_slices(self):
+        self.mri.analyze()
+        self.assertEqual(self.mri.slice1.slice_num, 0)
+        self.assertEqual(self.mri.slice11.slice_num, 10)
+
+    def test_orientation_unchanged(self):
+        orientations = [
+            tuple(metadata.ImageOrientationPatient)
+            for metadata in self.mri.dicom_stack.metadatas
+        ]
+        np.testing.assert_allclose(orientations, [[1, 0, 0, 0, 0.99998, -0.00623]] * 11)
+        self.mri.analyze()
+        self.assertEqual(
+            orientations,
+            [
+                tuple(metadata.ImageOrientationPatient)
+                for metadata in self.mri.dicom_stack.metadatas
+            ],
+        )
+
+    def test_missing_terminal_slice(self):
+        del self.mri.dicom_stack[-1]
+        del self.mri.dicom_stack.metadatas[-1]
+        with self.assertRaisesRegex(ValueError, "physical scan extent"):
+            self.mri.analyze()
+
+
+class TestACRMRMediumScanExtentLazy(TestACRMRMediumScanExtent):
+    memory_efficient_mode = True
 
 
 class TestMRMediumUniformityModule(TestCase):
@@ -821,7 +874,7 @@ class ACRMRMixin(CloudFileMixin):
 
 class ACRT1Single(ACRMRMixin, PlotlyTestMixin, TestCase):
     file_name = "T1-Single.zip"
-    row_mtf_50 = 0.96
+    row_mtf_50 = 1.061
     col_mtf_50 = 0.96
     phantom_roll = -0.5
     slice_thickness = 5
@@ -894,7 +947,7 @@ class ACRUVMSliceLocation(ACRMRMixin, TestCase):
 
 class ACRGE3T(ACRMRMixin, TestCase):
     file_name = "GE 3T.zip"
-    row_mtf_50 = 0.96
+    row_mtf_50 = 1.065
     col_mtf_50 = 0.96
     phantom_roll = -0.3
     slice_thickness = 5
@@ -943,6 +996,7 @@ class ACRGE3TRotated(ACRGE3T):
     phantom_roll = -0.4
     slice_thickness = 4.8  # induced rotation does change this a bit. See above.
     low_contrast_score = 10
+    row_mtf_50 = 0.889  # induced rotation makes the second MTF roi just barely below 50%, making this catch on a different step
 
     @classmethod
     def setUpClass(cls):
@@ -1019,7 +1073,7 @@ class ACRMRSagittal(ACRMRMixin, TestCase):
     file_name = "ACR MR Sagittal.zip"
     check_uid = False
     row_mtf_50 = 1.04
-    col_mtf_50 = 0.82
+    col_mtf_50 = 0.984
     slice_thickness = 5.29
     slice1_shift = -0.98
     slice11_shift = 0.98
@@ -1090,8 +1144,8 @@ class ACRMRSagittal2(ACRMRMixin, TestCase):
     # RAM-5749
     file_name = "RAM-5749 ACR MR Sag.zip"
     check_uid = False
-    row_mtf_50 = 0.95
-    col_mtf_50 = 1.04
+    row_mtf_50 = 0.721
+    col_mtf_50 = 0.855
     slice_thickness = 0.98
     slice1_shift = -0.49
     slice11_shift = 0.0

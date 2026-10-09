@@ -10,6 +10,83 @@ Legend
 * :bdg-primary:`Refactor` denotes a code refactor; usually this means an efficiency boost or code cleanup.
 * :bdg-danger:`Change` denotes a change that may break existing code.
 
+v3.49.0
+-------
+
+Core
+^^^^
+
+* :bdg-warning:`Fixed` Warnings from Pylinac analyses now respect the calling
+  application's standard Python warning filters. This makes it easier to
+  filter out unwanted warnings in user applications; ignored warnings are also excluded from
+  ``results_data().warnings``.
+* :bdg-success:`Feature` DICOM image stacks can now be rotated 180 degrees
+  around their in-plane vertical axis with
+  :meth:`~pylinac.core.image.LazyDicomImageStack.z_flip`. This is to provide
+  a tool for clinic's that accidentally scanned their CT/CBCT phantom inverted.
+* :bdg-warning:`Fixed` Fixed an issue where TIFF images containing unrecognized metadata
+  tags could fail to load with a KeyError, affecting analyses using TIFF images.
+  Unknown tags are now preserved without preventing image loading. Missing critical tags
+  continue to produce descriptive errors explaining which values to supply.
+
+CT
+^^
+
+* :bdg-warning:`Fixed` ACR MRI and CatPhan analyses now allow a tolerance of half
+  the slice spacing, capped at 0.5 mm, when checking whether the scan covers all
+  required modules. This resolves incorrect scan extent errors from scan orientations
+  that were not perfectly aligned to the scan axis, sometimes seen in MRI scans,
+  while still rejecting scans missing a terminal slice.
+
+Planar Imaging
+^^^^^^^^^^^^^^
+
+* :bdg-success:`Feature` Light/radiation phantom analyses now accept optional
+  ``bb_points`` in image-pixel coordinates.
+  The supplied points can be in
+  any order. Results report whether BB selection was manual or automatic via
+  ``bb_detection_method``. See :ref:`manual-planar-bb-selection`.
+
+MTF
+^^^
+
+* :bdg-danger:`Change` Peak-valley
+  :meth:`~pylinac.core.mtf.MTF.relative_resolution` now returns ``None`` when
+  the requested percentage is outside the measured rMTF range, instead of
+  extrapolating. Reports and QuAAC exports show ``N/A``.
+  See :ref:`peak-valley-mtf` for details. This affects planar imaging, CatPhan, ACR, and Helios.
+* :bdg-danger:`Change` Related to above, non-monotonic curves now return the leftmost crossing when multiple spatial
+  frequencies match the requested percentage. Previously, non-monotonic rMTFs could output results that
+  did not lie along the MTF curve. Results will now always be along the curve.
+
+Starshot
+^^^^^^^^
+
+* :bdg-success:`Feature` Starshot Plotly plots now show two green outlines marking
+  the circular sampling band and green X markers at the detected spoke positions,
+  matching the overlays shown by Matplotlib.
+* :bdg-danger:`Change` :meth:`~pylinac.starshot.Starshot.plotly_analyzed_images`
+  now returns a single full-image figure under the ``"Image"`` key. The separate
+  zoomed ``"Wobble"`` figure has been removed; use Plotly's interactive zoom to
+  inspect the wobble circle.
+* :bdg-success:`Feature` Starshot analysis now accepts an optional ``reference_point``
+  in image-pixel coordinates to compare a mechanical reference point with the fitted
+  isocenter. Results report signed X/Y offsets and the straight-line distance in
+  millimeters, with the comparison included in plots, PDF reports, and QuAAC exports.
+* :bdg-warning:`Fixed` The zoomed wobble-circle plot now matches the orientation
+  of the full image: X increases rightward and Y increases downward to match Screen :ref:`image-coordinate-system`.
+  Analysis results are unchanged.
+
+Planar Imaging
+^^^^^^^^^^^^^^
+
+* :bdg-warning:`Fixed` Light/radiation field Plotly plots now include crosshairs
+  for the BB centroid, EPID center, and radiation field center. This applies to
+  Standard Imaging FC2, Doselab RLf, IsoAlign, IMT L-Rad, and SNC FSQA.
+* :bdg-warning:`Fixed` Automatically detected BB disk ROIs now have one uniquely
+  named legend entry per BB, instead of duplicate entries for the outline and
+  center marker. Manually selected BBs are shown as cross markers and as one group.
+
 v3.48.0
 -------
 

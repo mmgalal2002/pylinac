@@ -47,7 +47,7 @@ from .core.contrast import Contrast
 from .core.geometry import Line, Point
 from .core.image import ArrayImage, DicomImageStack, ImageLike, z_position
 from .core.io import get_url, retrieve_demo_file
-from .core.mtf import MTF
+from .core.mtf import MTF, format_resolution
 from .core.nps import (
     average_power,
     max_frequency,
@@ -196,8 +196,8 @@ class CTP528Result(BaseModel):
     start_angle_radians: float | None = Field(
         description="The angle where the circular profile started."
     )
-    mtf_lp_mm: dict = Field(
-        description="A dictionary from 10% to 90% resolution in steps of 10 of the MTF in lp/mm. E.g. ``'20': 0.748``."
+    mtf_lp_mm: dict[int, float | None] = Field(
+        description="A dictionary from 10% to 90% resolution in steps of 10 of the MTF in lp/mm. E.g. ``'20': 0.748``. Values are None when the requested percentage is outside the measured MTF range."
     )
     roi_settings: dict[str, dict[str, int | float]] = Field(
         description="A dictionary of the settings used for each MTF ROI. The key names are ``region_<n>`` where ``<n>`` is the region number."
@@ -2384,15 +2384,16 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
         """Ensure that all the modules of the phantom have been scanned. If a CBCT isn't
         positioned correctly, some modules might not be included.
 
-        It appears there can be rounding errors between the DICOM tag and the actual slice position. See RAM-2897.
+        Allow a tolerance of half the slice spacing, capped at 0.5 mm, for small
+        discrepancies between configured module positions and DICOM slice positions.
+        This prevents a missing terminal slice from being accepted. Comparing unrounded
+        endpoints avoids rounding-boundary failures. See RAM-2897 and RAM-6365.
         """
         z_positions = [z_position(m) for m in self.dicom_stack.metadatas]
-        min_scan_extent_slice = round(min(z_positions), 1)
-        max_scan_extent_slice = round(max(z_positions), 1)
-        min_config_extent_slice = round(min(self._module_offsets()), 1)
-        max_config_extent_slice = round(max(self._module_offsets()), 1)
-        return (min_config_extent_slice >= min_scan_extent_slice) and (
-            max_config_extent_slice <= max_scan_extent_slice
+        module_positions = self._module_offsets()
+        tolerance_mm = min(0.5, self.dicom_stack.slice_spacing / 2)
+        return (min(module_positions) >= min(z_positions) - tolerance_mm) and (
+            max(module_positions) <= max(z_positions) + tolerance_mm
         )
 
     def find_phantom_axis(self) -> (Callable, Callable):
@@ -2908,9 +2909,9 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
         if self._has_module(CTP528):
             ctp528_result = [
                 " - CTP528 Results - ",
-                f"MTF 80% (lp/mm): {self.ctp528.mtf.relative_resolution(80):2.2f}",
-                f"MTF 50% (lp/mm): {self.ctp528.mtf.relative_resolution(50):2.2f}",
-                f"MTF 30% (lp/mm): {self.ctp528.mtf.relative_resolution(30):2.2f}",
+                f"MTF 80% (lp/mm): {format_resolution(self.ctp528.mtf.relative_resolution(80))}",
+                f"MTF 50% (lp/mm): {format_resolution(self.ctp528.mtf.relative_resolution(50))}",
+                f"MTF 30% (lp/mm): {format_resolution(self.ctp528.mtf.relative_resolution(30))}",
             ]
             results.append(ctp528_result)
         if self._has_module(CTP486):
@@ -2977,7 +2978,7 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
         if results_data["ctp528"] is not None:
             for percent, mtf in results_data["ctp528"]["mtf_lp_mm"].items():
                 data[f"MTF {percent}%"] = QuaacDatum(
-                    value=mtf,
+                    value="N/A" if mtf is None else mtf,
                     unit="lp/mm",
                 )
         if results_data["ctp515"] is not None:

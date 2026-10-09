@@ -10,6 +10,8 @@ from unittest import SkipTest, TestCase, skip
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.markers import MarkerStyle
+from parameterized import parameterized
 from plotly import graph_objects as go
 from scipy.ndimage import rotate
 from skimage import measure
@@ -25,6 +27,7 @@ from pylinac import (
     StandardImagingQC3,
 )
 from pylinac.core import image
+from pylinac.core.geometry import Point
 from pylinac.planar_imaging import (
     PTWEPIDQC,
     SNCFSQA,
@@ -267,7 +270,7 @@ class GeneralTests(TestCase):
 class PlanarPhantomMixin(QuaacTestBase, CloudFileMixin, PlotlyTestMixin):
     klass: Callable
     dir_path = ["planar_imaging"]
-    mtf_50 = None
+    mtf_values = {}
     invert = False
     ssd = "auto"
     median_contrast = None
@@ -312,15 +315,16 @@ class PlanarPhantomMixin(QuaacTestBase, CloudFileMixin, PlotlyTestMixin):
         super().tearDownClass()
 
     def test_bad_inversion_recovers(self):
-        if self.mtf_50 is None:
-            self.skipTest("mtf_50 not available")
+        if not self.mtf_values:
+            self.skipTest("mtf_values not available")
         instance = self.create_instance()
         instance.image.invert()
         instance.analyze(ssd=self.ssd, invert=self.invert)
         # check that the MTF is the expected value. This is a surrogate for the angle being wrong
-        self.assertAlmostEqual(
-            self.mtf_50, instance.mtf.relative_resolution(50), delta=0.3
-        )
+        for percent, expected in self.mtf_values.items():
+            self.assertAlmostEqual(
+                expected, instance.mtf.relative_resolution(percent), delta=0.3
+            )
 
     def test_plotting(self):
         self.instance.plot_analyzed_image()
@@ -337,11 +341,12 @@ class PlanarPhantomMixin(QuaacTestBase, CloudFileMixin, PlotlyTestMixin):
         save_file(self.instance.publish_pdf)
 
     def test_mtf(self):
-        if self.mtf_50 is None:
-            self.skipTest("mtf_50 not available")
-        self.assertAlmostEqual(
-            self.mtf_50, self.instance.mtf.relative_resolution(50), delta=0.3
-        )
+        if not self.mtf_values:
+            self.skipTest("mtf_values not available")
+        for percent, expected in self.mtf_values.items():
+            self.assertAlmostEqual(
+                expected, self.instance.mtf.relative_resolution(percent), delta=0.3
+            )
 
     def test_rois_seen(self):
         if self.rois_seen is None:
@@ -393,7 +398,7 @@ class LeedsMixin(PlanarPhantomMixin):
 
 
 class LeedsDemo(LeedsMixin, TestCase):
-    mtf_50 = 1.5
+    mtf_values = {50: 1.5}
     piu = 91.8
 
     def test_demo(self):
@@ -401,27 +406,27 @@ class LeedsDemo(LeedsMixin, TestCase):
 
 
 class LeedsCCW(LeedsMixin, TestCase):
-    mtf_50 = 1.5
+    mtf_values = {50: 1.5}
     file_name = "Leeds_ccw.dcm"
     piu = 93.5
 
 
 class Leeds45Deg(LeedsMixin, TestCase):
-    mtf_50 = 1.9
+    mtf_values = {50: 1.9}
     ssd = "auto"
     file_name = "Leeds-45deg.dcm"
     piu = 95.5
 
 
 class LeedsDirtyEdges(LeedsMixin, TestCase):
-    mtf_50 = 1.53
+    mtf_values = {50: 1.53}
     ssd = "auto"
     file_name = "Leeds-dirty-edges.dcm"
     piu = 96.8
 
 
 class LeedsOffsetHighRes(LeedsMixin, TestCase):
-    mtf_50 = 1.85
+    mtf_values = {50: 1.85}
     ssd = "auto"
     file_name = "Leeds_offset_high_res_rois.dcm"
     piu = 89.3
@@ -429,7 +434,7 @@ class LeedsOffsetHighRes(LeedsMixin, TestCase):
 
 class LeedsBlue(LeedsMixin, TestCase):
     klass = LeedsTORBlue
-    mtf_50 = 1.5
+    mtf_values = {50: 1.5}
     ssd = "auto"
     file_name = "Leeds_Blue.dcm"
     piu = 97
@@ -438,7 +443,7 @@ class LeedsBlue(LeedsMixin, TestCase):
 
 class LeedsBlueRotated(LeedsMixin, TestCase):
     klass = LeedsTORBlue
-    mtf_50 = 1.5
+    mtf_values = {50: 1.5}
     ssd = "auto"
     file_name = "Leeds_Blue.dcm"
     piu = 97
@@ -453,7 +458,7 @@ class LeedsBlueRotated(LeedsMixin, TestCase):
 
 @skip("Phantom appears distorted. MTF locations are different than other phantoms")
 class LeedsClosedBlades(LeedsMixin, TestCase):
-    mtf_50 = 1.3
+    mtf_values = {50: 1.3}
     ssd = "auto"
     file_name = "Leeds-closed-blades.dcm"
 
@@ -461,7 +466,7 @@ class LeedsClosedBlades(LeedsMixin, TestCase):
 class LeedsACB1(LeedsMixin, TestCase):
     dir_path = ["planar_imaging", "Leeds", "ACB 1"]
     file_name = "1.dcm"
-    mtf_50 = 1.42
+    mtf_values = {50: 1.42}
     piu = 98.80
 
 
@@ -469,13 +474,13 @@ class LeedsBadInversion(LeedsMixin, TestCase):
     """Radmachine image where inversion was bad. pylinac should be able to correct"""
 
     file_name = "Leeds bad inversion.dcm"
-    mtf_50 = 1.21
+    mtf_values = {50: 1.21}
     piu = 97.86
 
 
 class SIQC3Demo(PlanarPhantomMixin, TestCase):
     klass = StandardImagingQC3
-    mtf_50 = 0.53
+    mtf_values = {50: 0.53}
     rois_seen = 5
     piu = 98
 
@@ -486,7 +491,7 @@ class SIQC3Demo(PlanarPhantomMixin, TestCase):
 class SIQC3_1(PlanarPhantomMixin, TestCase):
     klass = StandardImagingQC3
     file_name = "QC3-2.5MV.dcm"
-    mtf_50 = 1.19
+    mtf_values = {70: 0.571}
     rois_seen = 5
     piu = 91.8
 
@@ -494,7 +499,7 @@ class SIQC3_1(PlanarPhantomMixin, TestCase):
 class SIQC3_2(PlanarPhantomMixin, TestCase):
     klass = StandardImagingQC3
     file_name = "QC3-2.5MV-2.dcm"
-    mtf_50 = 1.16
+    mtf_values = {70: 0.576}
     ssd = 1000
     rois_seen = 5
     piu = 91.8
@@ -710,7 +715,7 @@ class Elekta10MU(ElektaLasVegasMixin, TestCase):
 
 class DoselabMVDemo(PlanarPhantomMixin, TestCase):
     klass = DoselabMC2MV
-    mtf_50 = 0.54
+    mtf_values = {50: 0.54}
     piu = 48.7
 
     def test_demo(self):
@@ -730,7 +735,7 @@ class DoseLabMVRotated(PlanarPhantomMixin, TestCase):
 
 class DoselabkVDemo(PlanarPhantomMixin, TestCase):
     klass = DoselabMC2kV
-    mtf_50 = 2.0
+    mtf_values = {50: 2.0}
     piu = 4.2
 
     def test_demo(self):
@@ -754,7 +759,7 @@ class DoselabkV70kVp(PlanarPhantomMixin, TestCase):
     klass = DoselabMC2kV
     dir_path = ["planar_imaging", "Doselab MC2"]
     file_name = "DL kV 70kVp.dcm"
-    mtf_50 = 1.14
+    mtf_values = {50: 1.14}
     piu = 0
 
     def test_window_ceiling(self):
@@ -777,7 +782,7 @@ class DoseLabkVRotated(PlanarPhantomMixin, TestCase):
 
 class SNCkVDemo(PlanarPhantomMixin, TestCase):
     klass = SNCkV
-    mtf_50 = 1.76
+    mtf_values = {50: 1.76}
     median_contrast = 0.17
     median_cnr = 69.4
     piu = 98.7
@@ -790,7 +795,7 @@ class SNCMVDemo(PlanarPhantomMixin, TestCase):
     klass = SNCMV
     median_cnr = 81
     median_contrast = 0.21
-    mtf_50 = 0.43
+    mtf_values = {50: 0.43}
     piu = 98.4
 
     def test_demo(self):
@@ -799,7 +804,7 @@ class SNCMVDemo(PlanarPhantomMixin, TestCase):
 
 class SNCMV12510_6MV1(PlanarPhantomMixin, TestCase):
     klass = SNCMV12510
-    mtf_50 = 0.91
+    mtf_values = {50: 0.91}
     median_contrast = 0.254
     median_cnr = 65.34
     dir_path = ["planar_imaging", "SNC MV Old"]
@@ -812,7 +817,7 @@ class SNCMV12510_6MV1(PlanarPhantomMixin, TestCase):
 
 class SNCMV12510_6MV2(PlanarPhantomMixin, TestCase):
     klass = SNCMV12510
-    mtf_50 = 0.85
+    mtf_values = {50: 0.85}
     median_contrast = 0.255
     median_cnr = 66.43
     dir_path = ["planar_imaging", "SNC MV Old"]
@@ -824,7 +829,7 @@ class SNCMV12510_Jig(PlanarPhantomMixin, TestCase):
     """Phantom where the jig is touching and gets in the way of analysis"""
 
     klass = SNCMV12510
-    mtf_50 = 0.92
+    mtf_values = {50: 0.92}
     median_contrast = 0.23
     median_cnr = 58.6
     dir_path = ["planar_imaging", "SNC MV Old"]
@@ -836,7 +841,7 @@ class SNCMV12510_HighRes(PlanarPhantomMixin, TestCase):
     """The HighRes and LowRes tests use the same phantom but different imaging resolution"""
 
     klass = SNCMV12510
-    mtf_50 = 0.92
+    mtf_values = {50: 0.92}
     median_contrast = 0.23
     median_cnr = 63.5
     dir_path = ["planar_imaging", "SNC MV Old"]
@@ -848,7 +853,7 @@ class SNCMV12510_LowRes(PlanarPhantomMixin, TestCase):
     """The HighRes and LowRes tests use the same phantom but different imaging resolution"""
 
     klass = SNCMV12510
-    mtf_50 = 0.71
+    mtf_values = {50: 0.71}
     median_contrast = 0.23
     median_cnr = 61.8
     dir_path = ["planar_imaging", "SNC MV Old"]
@@ -860,7 +865,7 @@ class IBAPrimusDemo(PlanarPhantomMixin, TestCase):
     klass = IBAPrimusA
     dir_path = ["planar_imaging", "PrimusL"]
     file_name = "Demo.dcm"
-    mtf_50 = 1.66
+    mtf_values = {50: 1.33}
     ssd = 1395
     median_cnr = 1084.4
     median_contrast = 0.62
@@ -913,7 +918,7 @@ class IBAPrimusFarSSD(PlanarPhantomMixin, TestCase):
     klass = IBAPrimusA
     dir_path = ["planar_imaging", "PrimusL"]
     file_name = "Primus_farSSD.dcm"
-    mtf_50 = 2.33
+    mtf_values = {50: 1.95}
     ssd = 2790
     median_cnr = 3990
     median_contrast = 0.6
@@ -922,7 +927,7 @@ class IBAPrimusFarSSD(PlanarPhantomMixin, TestCase):
 
 class SIQCkVDemo(PlanarPhantomMixin, TestCase):
     klass = StandardImagingQCkV
-    mtf_50 = 1.81
+    mtf_values = {50: 1.81}
     rois_seen = 5
     piu = 96.7
 
@@ -932,7 +937,7 @@ class SIQCkVDemo(PlanarPhantomMixin, TestCase):
 
 class PTWEPIDDemo(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.79
+    mtf_values = {50: 0.79}
     piu = 95.4
 
     def test_demo(self):
@@ -941,7 +946,7 @@ class PTWEPIDDemo(PlanarPhantomMixin, TestCase):
 
 class PTWEPIDQC1(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.79
+    mtf_values = {50: 0.79}
     rois_seen = 9
     median_contrast = 0.26
     median_cnr = 40.9
@@ -952,7 +957,7 @@ class PTWEPIDQC1(PlanarPhantomMixin, TestCase):
 
 class PTWEPID15MV(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.5
+    mtf_values = {50: 0.5}
     rois_seen = 9
     median_contrast = 0.17
     median_cnr = 26.7
@@ -963,7 +968,7 @@ class PTWEPID15MV(PlanarPhantomMixin, TestCase):
 
 class PTWEPID6xHigh(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.79
+    mtf_values = {50: 0.79}
     rois_seen = 9
     median_contrast = 0.28
     median_cnr = 72.1
@@ -974,7 +979,7 @@ class PTWEPID6xHigh(PlanarPhantomMixin, TestCase):
 
 class PTWEPID6xHighQuality(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.79
+    mtf_values = {50: 0.79}
     rois_seen = 9
     median_contrast = 0.254
     median_cnr = 37.9
@@ -985,7 +990,7 @@ class PTWEPID6xHighQuality(PlanarPhantomMixin, TestCase):
 
 class PTWEPIDTB3(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.79
+    mtf_values = {50: 0.79}
     rois_seen = 9
     median_contrast = 0.31
     median_cnr = 43.2
@@ -996,7 +1001,7 @@ class PTWEPIDTB3(PlanarPhantomMixin, TestCase):
 
 class PTWEPIDTB4(PlanarPhantomMixin, TestCase):
     klass = PTWEPIDQC
-    mtf_50 = 0.79
+    mtf_values = {50: 0.79}
     rois_seen = 9
     median_contrast = 0.30
     median_cnr = 39.1
@@ -1042,6 +1047,49 @@ class FC2Mixin(PlanarPhantomMixin):
             roi_label_font_size=9,
         )
 
+    def test_plotly_center_crosshairs(self):
+        fig = self.instance.plotly_analyzed_images(show=False)["Image"]
+        centers = {
+            "BB Centroid": (self.instance.bb_center, "green"),
+            "EPID Center": (self.instance.epid_center, "blue"),
+            "Field Center": (self.instance.field_center, "red"),
+        }
+        for name, (center, color) in centers.items():
+            with self.subTest(center=name):
+                trace = next(trace for trace in fig.data if trace.name == name)
+                np.testing.assert_allclose(trace.x[3:], [center.x, center.x])
+                np.testing.assert_allclose(trace.y[:2], [center.y, center.y])
+                self.assertIsNone(trace.x[2])
+                self.assertIsNone(trace.y[2])
+                self.assertEqual(trace.line.color, color)
+
+    def test_plotly_bb_legend_labels(self):
+        fig = self.instance.plotly_analyzed_images(show=False)["Image"]
+        bb_labels = [
+            f"BB {label}"
+            for label in self.instance.bb_centers
+            if label != "Virtual Center"
+        ]
+        legend_names = [trace.name for trace in fig.data if trace.showlegend]
+        self.assertCountEqual(
+            legend_names, [*bb_labels, "BB Centroid", "EPID Center", "Field Center"]
+        )
+        for label in bb_labels:
+            with self.subTest(bb=label):
+                traces = [trace for trace in fig.data if trace.legendgroup == label]
+                self.assertEqual(len(traces), 2)
+                self.assertEqual(sum(bool(trace.showlegend) for trace in traces), 1)
+
+    def test_plotly_hide_metrics(self):
+        fig = self.instance.plotly_analyzed_images(show=False, show_metrics=False)[
+            "Image"
+        ]
+        self.assertEqual(len(fig.data), 4)
+        self.assertCountEqual(
+            [trace.name for trace in fig.data[1:]],
+            ["BB Centroid", "EPID Center", "Field Center"],
+        )
+
     def test_field_size(self):
         results_data = self.instance.results_data()
         self.assertAlmostEqual(
@@ -1068,6 +1116,127 @@ class FC2Mixin(PlanarPhantomMixin):
         self.assertAlmostEqual(
             results_data.field_bb_offset_y_mm, self.field_bb_offset_y_mm, delta=0.2
         )
+
+
+LIGHT_RAD_CLASSES = [StandardImagingFC2, DoselabRLf, IsoAlign, IMTLRad, SNCFSQA]
+
+
+class TestManualLightRadBBs(TestCase):
+    @parameterized.expand(LIGHT_RAD_CLASSES)
+    def test_plotly_marks_manual_bbs(self, klass):
+        automatic = klass.from_demo_image()
+        automatic.analyze()
+        selected = [
+            point
+            for label, point in automatic.bb_centers.items()
+            if label != "Virtual Center"
+        ]
+        manual = klass.from_demo_image()
+        manual.analyze(bb_points=list(reversed(selected)))
+        fig = manual.plotly_analyzed_images(
+            show=False, show_roi_labels=True, roi_label_font_size=12
+        )["Image"]
+        markers = next(
+            trace for trace in fig.data if trace.name == "Manual BB Locations"
+        )
+        np.testing.assert_allclose(
+            np.column_stack([markers.x, markers.y]),
+            [(point.x, point.y) for point in selected],
+        )
+        self.assertEqual(markers.marker.symbol, "x")
+        self.assertEqual(len(markers.text), klass.expected_bb_count)
+        self.assertNotIn("Virtual Center", markers.text)
+        self.assertEqual(markers.textfont.size, 12)
+        self.assertEqual(len(fig.data), 5)
+
+    @parameterized.expand(LIGHT_RAD_CLASSES)
+    def test_matplotlib_preserves_automatic_outlines_and_marks_manual_bbs(self, klass):
+        automatic = klass.from_demo_image()
+        automatic.analyze()
+        measured = {
+            label: point
+            for label, point in automatic.bb_centers.items()
+            if label != "Virtual Center"
+        }
+        manual = klass.from_demo_image()
+        manual.analyze(bb_points=list(reversed(list(measured.values()))))
+
+        automatic_figures, _ = automatic.plot_analyzed_image(show=False)
+        automatic_axes = automatic_figures[0].axes[0]
+        self.assertGreater(len(automatic_axes.collections), 0)
+        self.assertFalse(
+            any(
+                collection.get_label() == "Manual BB Locations"
+                for collection in automatic_axes.collections
+            )
+        )
+        plt.close(automatic_figures[0])
+
+        manual_figures, _ = manual.plot_analyzed_image(show=False)
+        manual_axes = manual_figures[0].axes[0]
+        manual_markers = next(
+            collection
+            for collection in manual_axes.collections
+            if collection.get_label() == "Manual BB Locations"
+        )
+        np.testing.assert_allclose(
+            manual_markers.get_offsets(),
+            [(point.x, point.y) for point in measured.values()],
+        )
+        x_marker = MarkerStyle("x")
+        np.testing.assert_array_equal(
+            manual_markers.get_paths()[0].vertices,
+            x_marker.get_path().transformed(x_marker.get_transform()).vertices,
+        )
+        plt.close(manual_figures[0])
+
+    @parameterized.expand(LIGHT_RAD_CLASSES)
+    def test_manual_points_match_automatic_results_in_any_order(self, klass):
+        automatic = klass.from_demo_image()
+        automatic.analyze()
+        self.assertEqual(automatic.results_data().bb_detection_method, "automatic")
+        selected = [
+            point
+            for label, point in automatic.bb_centers.items()
+            if label != "Virtual Center"
+        ]
+        self.assertEqual(len(selected), klass.expected_bb_count)
+        manual = klass.from_demo_image()
+        manual.analyze(bb_points=[(point.x, point.y) for point in reversed(selected)])
+        self.assertEqual(manual.results_data().bb_detection_method, "manual")
+        self.assertIn("BB detection method: manual", manual.results())
+        for label, point in automatic.bb_centers.items():
+            self.assertAlmostEqual(manual.bb_centers[label].x, point.x)
+            self.assertAlmostEqual(manual.bb_centers[label].y, point.y)
+
+    @parameterized.expand(LIGHT_RAD_CLASSES)
+    def test_incorrect_count_is_rejected_for_each_phantom(self, klass):
+        phantom = klass.from_demo_image()
+        with self.assertRaisesRegex(ValueError, "Expected"):
+            phantom.analyze(bb_points=[])
+
+    @parameterized.expand(
+        ["duplicate", "nan", "negative", "right_edge", "one_coordinate"]
+    )
+    def test_invalid_coordinates_are_rejected(self, invalid_case):
+        phantom = StandardImagingFC2.from_demo_image()
+        valid = [(100, 100), (200, 100), (100, 200), (200, 200)]
+        invalid_points = {
+            "duplicate": valid[0],
+            "nan": (float("nan"), 200),
+            "negative": (-1, 200),
+            "right_edge": (phantom.image.array.shape[1], 200),
+            "one_coordinate": (10,),
+        }
+        with self.assertRaises(ValueError):
+            phantom.analyze(bb_points=[*valid[:3], invalid_points[invalid_case]])
+
+    def test_reanalysis_updates_detection_method(self):
+        phantom = IMTLRad.from_demo_image()
+        phantom.analyze(bb_points=[Point(phantom.image.center)])
+        self.assertEqual(phantom.results_data().bb_detection_method, "manual")
+        phantom.analyze()
+        self.assertEqual(phantom.results_data().bb_detection_method, "automatic")
 
 
 class FC2Demo(FC2Mixin, TestCase):
@@ -1176,7 +1345,7 @@ class FC2BBDownRight1mm(FC2Mixin, TestCase):
 class DoselabRLfMixin(FC2Mixin):
     klass = DoselabRLf
     dir_path = ["planar_imaging", "Doselab RLf"]
-    fig_data = {0: {"title": "Doselab RLf Phantom Analysis", "num_traces": 9}}
+    fig_data = {0: {"title": "Doselab RLf Phantom Analysis", "num_traces": 12}}
 
 
 class DoselabRLfDemo(DoselabRLfMixin, TestCase):
