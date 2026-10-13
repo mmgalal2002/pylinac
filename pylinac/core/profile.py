@@ -74,7 +74,8 @@ def stretch(
             di = np.finfo(fill_dtype)
         new_max = di.max
     # perfectly normalize the array (0..1). ground, then div by range
-    stretched_array = (array - array.min()) / (array.max() - array.min())
+    array_min = array.min()
+    stretched_array = (array - array_min) / (array.max() - array_min)
     # stretch normalized array to new max/min
     stretched_array *= new_max
     # stretched_array += new_min
@@ -259,7 +260,7 @@ class ProfileBase(ProfileMixin, ABC):
         new_x = f(x)
         if new_x.size == 1:
             return float(new_x)
-        return f(x)
+        return new_x
 
     def x_idx_at_x(self, x: float) -> int:
         """Return the **index** of the x-value closest to the given x-value."""
@@ -285,7 +286,7 @@ class ProfileBase(ProfileMixin, ABC):
         new_x = f(y)
         if new_x.size == 1:
             return float(new_x)
-        return f(y)
+        return new_x
 
     @abstractmethod
     def field_edge_idx(self, side: str) -> float:
