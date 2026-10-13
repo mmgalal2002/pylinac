@@ -29,11 +29,22 @@ These rules apply to the Picket Fence pilot and every future detailed report.
 ## Current Revision Steps
 
 1. [x] Record the clinician-facing wording and full-branding requirements.
-2. [ ] Add shared human label handling for nested results and measurement tables.
-3. [ ] Apply clinical labels, units and explanations to the Picket Fence report.
-4. [ ] Add a reusable brand configuration and use it on every report element.
-5. [ ] Regenerate the Picket Fence pilot with the updated wording and branding.
+2. [x] Add shared human label handling for nested results and measurement tables.
+3. [x] Apply clinical labels, units and explanations to the Picket Fence report.
+4. [x] Add a reusable brand configuration and use it on report text, tables,
+   charts, page backgrounds, headers and footers. Preserve the original image artifact.
+5. [x] Regenerate the Picket Fence pilot with the updated wording and branding.
 6. [ ] Leave visual review and clinical acceptance to the human before wider rollout.
+
+Current examples:
+
+- [docs/source/files/picket_fence_detailed_pilot.pdf](docs/source/files/picket_fence_detailed_pilot.pdf)
+- [docs/source/files/picket_fence_branded_pilot.pdf](docs/source/files/picket_fence_branded_pilot.pdf)
+
+Both examples were rendered from the local documentation image without installing
+packages or using cloud data. Editor diagnostics found no new renderer errors.
+Automated PDF text extraction was not run because a PDF parser is not installed.
+Visual layout, wording and clinical acceptance still need human review.
 
 ## Simple API
 
