@@ -47,6 +47,18 @@ not change measurements or tolerance decisions. Winston-Lutz reports include
 each image separately; mammography reports retain individual mass, speck-group
 and fibre detail views.
 
+The existing ``logo`` argument also customises detailed reports:
+
+.. code-block:: python
+
+    wl.publish_pdf(
+        "winston_lutz_detailed.pdf", detailed=True, logo="clinic_logo.png"
+    )
+
+Supply a local image filename or :class:`pathlib.Path`. The logo is placed in
+every page header with its proportions and transparency preserved. A missing
+custom logo raises ``FileNotFoundError``; it is not silently replaced.
+
 Use a ``branding`` mapping to change the full report identity:
 
 .. code-block:: python
@@ -58,6 +70,7 @@ Use a ``branding`` mapping to change the full report identity:
         notes="For local review",
         branding={
             "name": "Clinic QA",
+            "logo": "clinic_logo.png",
             "report_title": "Winston-Lutz Review",
             "primary_color": "#165A70",
             "chart_color": "#287A63",
@@ -65,6 +78,12 @@ Use a ``branding`` mapping to change the full report identity:
             "footer_text": "Local review copy",
         },
     )
+
+The logo can be supplied through ``branding`` or the separate ``logo`` argument.
+If both are supplied, the separate ``logo`` argument takes precedence. Without
+a custom logo, the default Pylinac identity uses the packaged Pylinac logo when
+available; a different brand name does not automatically use the Pylinac logo.
+Logo files are never downloaded by the detailed renderer.
 
 See :class:`~pylinac.core.reporting.ReportBranding` for fonts, colours, headers,
 footers and other supported settings. Custom fonts must already be registered
@@ -110,9 +129,15 @@ constructors, ``from_zip`` and ``from_multiple_images``. For example:
             "method": "from_zip",
             "init": {},
             "analyze": {},
-            "publish": {"notes": "Human review pending"}
+            "publish": {
+                "notes": "Human review pending",
+                "logo": "E:/clinic/clinic_logo.png"
+            }
         }
     }
+
+The manifest's ``publish.logo`` applies to both standard and branded examples.
+Omit it when no custom logo is required.
 
 Only use images and settings appropriate to the specified analysis. A TIFF
 Starshot image without an SID tag needs its measured source-to-image distance
