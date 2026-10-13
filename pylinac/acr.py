@@ -5,6 +5,7 @@ import math
 import textwrap
 import warnings
 import webbrowser
+from collections.abc import Mapping
 from io import BytesIO
 from pathlib import Path
 
@@ -762,6 +763,9 @@ class ACRCT(CatPhanBase, ResultsDataMixin[ACRCTResult]):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -783,7 +787,22 @@ class ACRCT(CatPhanBase, ResultsDataMixin[ACRCTResult]):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include every module result and separate analysis artifacts.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title=f"{self._model} Analysis",
+                context={"Phantom model": self._model, "Number of scan images": self.num_images},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                plots={"ACR CT module artifacts": lambda: self.plot_images(show=False)},
+                open_file=open_file,
+            )
+            return
         analysis_title = f"{self._model} Analysis"
         texts = [
             " - ACR CT 464 Results - ",
@@ -2292,6 +2311,9 @@ class ACRMRILarge(CatPhanBase, ResultsDataMixin[ACRMRIResult]):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -2313,7 +2335,22 @@ class ACRMRILarge(CatPhanBase, ResultsDataMixin[ACRMRIResult]):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include every MRI module result and separate module and profile artifacts.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title=f"{self._model} Analysis",
+                context={"Phantom model": self._model, "Number of scan images": self.num_images},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                plots={"ACR MRI module artifacts": lambda: self.plot_images(show=False)},
+                open_file=open_file,
+            )
+            return
         analysis_title = f"{self._model} Analysis"
         analysis_images = self.save_images(to_stream=True)
 
