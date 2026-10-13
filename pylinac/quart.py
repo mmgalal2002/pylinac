@@ -798,6 +798,9 @@ class QuartDVT(CatPhanBase, ResultsDataMixin[QuartDVTResult]):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: dict[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -819,7 +822,23 @@ class QuartDVT(CatPhanBase, ResultsDataMixin[QuartDVTResult]):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include every module and region result with separate image artifacts.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import ReportField, publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title=f"{self._model} Analysis",
+                context={"Phantom model": self._model, "Number of scan images": self.num_images},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                fields={("origin_slice",): ReportField("Reference scan image number", numbered=True)},
+                plots={"Quart module images": lambda: self.plot_images(show=False)},
+                open_file=open_file,
+            )
+            return
         analysis_title = f"{self._model} Analysis"
         analysis_images = self.save_images(to_stream=True)
 
