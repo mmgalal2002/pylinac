@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import BinaryIO
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -85,6 +87,57 @@ class JawOrthogonality:
     def results(self) -> dict[str, float]:
         """Return a dict of the results. Keys are 'top_left', 'top_right', 'bottom_left', 'bottom_right'."""
         return self.result
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: Path | str | None = None,
+        *,
+        detailed: bool = True,
+        branding: Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish jaw-corner measurements and the detected image edges.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Review notes.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Site and review information.
+        logo : str or Path, optional
+            Local logo.
+        detailed : bool
+            Must be True; jaw orthogonality had no legacy PDF report.
+        branding : mapping, optional
+            Full identity; see :class:`~pylinac.core.reporting.ReportBranding`.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("JawOrthogonality has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "result"):
+            raise ValueError("Analyze the image before reporting with .analyze().")
+        publish_analysis_report(
+            {**self.results(), "edge_measurements": self.line_angles}, filename,
+            title="Jaw Orthogonality Analysis",
+            context={"Image identifier": self.image.base_path},
+            notes=notes, metadata=metadata, logo=logo, branding=branding,
+            fields={
+                **{(key,): ReportField(f"{key.replace('_', ' ').capitalize()} image-corner angle (degrees)", decimal_places=1) for key in self.result},
+                ("edge_measurements",): ReportField("Detected jaw-edge measurements"),
+                ("edge_measurements", "*", "angle"): ReportField("Detected edge angle (radians)", decimal_places=3),
+                ("edge_measurements", "*", "dist"): ReportField("Detected edge distance (image pixels)", decimal_places=1),
+            },
+            plots={"Detected jaw edges": lambda: self.plot_analyzed_image(show=False)},
+            open_file=open_file,
+        )
 
     def plot_analyzed_image(self, show: bool = True):
         """Plot the image with the lines drawn. The lines are the detected jaw edges."""
