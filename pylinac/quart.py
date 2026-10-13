@@ -833,6 +833,7 @@ class QuartDVT(CatPhanBase, ResultsDataMixin[QuartDVTResult]):
             publish_analysis_report(
                 self.results_data(), filename, title=f"{self._model} Analysis",
                 context={"Phantom model": self._model, "Number of scan images": self.num_images},
+                scan_images=[Path(img.path).name for img in self.dicom_stack],
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
                 fields={("origin_slice",): ReportField("Reference scan image number", numbered=True)},
                 plots={"Quart module images": lambda: self.plot_images(show=False)},
