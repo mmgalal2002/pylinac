@@ -35,7 +35,7 @@ import os.path as osp
 import shutil
 import webbrowser
 import zipfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from io import BufferedReader, BytesIO
 from pathlib import Path
@@ -170,6 +170,42 @@ class MachineLogs(list):
         """Check if any logs have been loaded."""
         if len(self) == 0:
             raise ValueError("No logs have been loaded yet.")
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: Path | str | None = None,
+        *,
+        detailed: bool = True,
+        branding: Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish a combined collection report with complete per-log results.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Review notes.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Site and review information.
+        logo : str or Path, optional
+            Local logo.
+        detailed : bool
+            Must be True; collections had no legacy PDF report. Calculate each
+            treatment log's gamma map with the desired criteria before reporting.
+        branding : mapping, optional
+            Full report identity.
+        """
+        self._check_empty()
+        if not detailed:
+            raise ValueError("MachineLogs has no legacy PDF. Use detailed=True.")
+        _publish_log_report(self, filename, notes, metadata, logo, branding, open_file)
 
     def report_basic_parameters(self) -> None:
         """Report basic parameters of the logs.
@@ -1567,6 +1603,53 @@ class LogBase:
         filename = io.get_url(url)
         return cls(filename, exclude_beam_off)
 
+    def _detailed_results(self) -> dict[str, object]:
+        imaging = self.treatment_type == TreatmentType.IMAGING.value
+        axes: dict[str, object] = {}
+
+        def record_axis(name: str, axis: Axis | None) -> None:
+            if axis is not None:
+                axes[name] = {"actual": axis.actual, "expected": axis.expected}
+
+        for name, value in vars(self.axis_data).items():
+            if isinstance(value, Axis):
+                record_axis(name, value)
+            elif isinstance(value, (JawStruct, CouchStruct)):
+                for component, axis in vars(value).items():
+                    if isinstance(axis, Axis) or axis is None:
+                        record_axis(f"{name} {component}", axis)
+        for leaf, axis in self.axis_data.mlc.leaf_axes.items():
+            record_axis(f"MLC leaf {leaf} (cm)", axis)
+        snapshot: dict[str, object] = {
+            "image_identifier": Path(self.filename).name,
+            "log_type": type(self).__name__, "treatment_type": self.treatment_type,
+            "exclude_beam_off": self.exclude_beam_off,
+            "number_of_beam_holds": self.num_beamholds,
+            "axis_measurements": axes,
+            "leaf_statistics": None, "gamma": None,
+        }
+        if not imaging:
+            gamma = self.fluence.gamma
+            if not gamma.is_map_calced():
+                raise ValueError("Calculate log.fluence.gamma.calc_map() with the desired criteria before publishing a detailed report. Existing gamma results are never recalculated by the report.")
+            mlc = self.axis_data.mlc
+            snapshot["leaf_statistics"] = {
+                "mean_rms_mm": mlc.get_RMS_avg() * 10,
+                "maximum_rms_mm": mlc.get_RMS_max() * 10,
+                "error_95th_percentile_mm": mlc.get_error_percentile(95) * 10,
+                "leaf_numbers": mlc.get_leaves(MLCBank.BOTH),
+                "rms_by_leaf_cm": mlc.get_RMS(MLCBank.BOTH),
+            }
+            snapshot["gamma"] = {
+                "dose_tolerance_percent": gamma.doseTA,
+                "distance_tolerance_mm": gamma.distTA,
+                "dose_threshold": gamma.threshold,
+                "passing_percent": gamma.pass_prcnt,
+                "mean_gamma": gamma.avg_gamma,
+                "fluence_resolution_mm": self.fluence.actual.resolution,
+            }
+        return snapshot
+
     def plot_summary(self, show: bool = True):
         """Plot actual & expected fluence, gamma map, gamma histogram,
         MLC error histogram, and MLC RMS histogram.
@@ -2009,6 +2092,9 @@ class Dynalog(LogBase):
         metadata: dict = None,
         open_file: bool = False,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -2030,7 +2116,15 @@ class Dynalog(LogBase):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete axis data and separate fluence and error artifacts.
+            Calculate gamma with the desired criteria before reporting.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            _publish_log_report([self], filename, notes, metadata, logo, branding, open_file)
+            return
         self.fluence.gamma.calc_map()
         canvas = pdf.PylinacCanvas(
             filename, page_title="Dynalog Analysis", metadata=metadata, logo=logo
@@ -2660,6 +2754,9 @@ class TrajectoryLog(LogBase):
         notes: str | list = None,
         open_file: bool = False,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -2681,7 +2778,15 @@ class TrajectoryLog(LogBase):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete axis data and separate fluence and error artifacts.
+            Calculate gamma with the desired criteria before reporting.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            _publish_log_report([self], filename, notes, metadata, logo, branding, open_file)
+            return
         if self.treatment_type == TreatmentType.IMAGING.value:
             raise ValueError(
                 "Log is of imaging type (e.g. kV setup) and does not contain relevant gamma/leaf data"
@@ -2741,6 +2846,49 @@ class TrajectoryLog(LogBase):
     def is_hdmlc(self) -> bool:
         """Whether the machine has an HDMLC or not."""
         return self.header.mlc_model == 3
+
+
+def _publish_log_report(
+    logs: Sequence[LogBase],
+    filename: str | Path | BinaryIO,
+    notes: str | Sequence[str] | None,
+    metadata: Mapping[str, object] | None,
+    logo: Path | str | None,
+    branding: Mapping[str, object] | None,
+    open_file: bool,
+) -> None:
+    from .core.reporting import ReportField, ReportTableLabels, publish_analysis_report
+
+    snapshots = [log._detailed_results() for log in logs]
+    plots = {}
+    for number, log in enumerate(logs, 1):
+        prefix = f"Log {number}: {Path(log.filename).name}"
+        if log.treatment_type != TreatmentType.IMAGING.value:
+            for fluence in (Fluence.ACTUAL, Fluence.EXPECTED, Fluence.GAMMA):
+                plots[f"{prefix}: {fluence.value.capitalize()} fluence"] = lambda log=log, fluence=fluence: log.plot_subfluence(fluence, show=False)
+            for graph in (Graph.GAMMA, Graph.HISTOGRAM, Graph.RMS):
+                plots[f"{prefix}: {graph.value} distribution"] = lambda log=log, graph=graph: log.plot_subgraph(graph, show=False)
+        plots[f"{prefix}: Gantry positions"] = lambda log=log: log.axis_data.gantry._plot("actual", show=False)
+    fields = {
+        ("number_of_logs",): ReportField("Number of logs"),
+        ("logs",): ReportField("Complete individual log measurements"),
+        ("logs", "*", "image_identifier"): ReportField("Log file identifier"),
+        ("logs", "*", "exclude_beam_off"): ReportField("Beam-off snapshots excluded from MLC statistics"),
+        ("logs", "*", "axis_measurements"): ReportField("Recorded machine-axis snapshots", "Values retain the native log units. MLC and jaw positions are in centimetres; gantry and collimator angles are in degrees. Snapshot numbers are not elapsed time."),
+        ("logs", "*", "leaf_statistics"): ReportField("Multileaf collimator error measurements", missing_label="Not evaluated for imaging logs"),
+        ("logs", "*", "gamma"): ReportField("Recorded fluence gamma results", missing_label="Not evaluated for imaging logs"),
+        ("logs", "*", "leaf_statistics", "mean_rms_mm"): ReportField("Mean leaf root-mean-square error (mm)", decimal_places=3),
+        ("logs", "*", "leaf_statistics", "maximum_rms_mm"): ReportField("Largest leaf root-mean-square error (mm)", decimal_places=3),
+        ("logs", "*", "leaf_statistics", "error_95th_percentile_mm"): ReportField("95th percentile leaf error (mm)", decimal_places=3),
+        ("logs", "*", "gamma", "passing_percent"): ReportField("Gamma measurements passing (%)", decimal_places=1),
+    }
+    publish_analysis_report(
+        {"number_of_logs": len(logs), "logs": snapshots}, filename,
+        title="Machine Log Analysis" if len(logs) == 1 else "Machine Log Collection Analysis",
+        notes=notes, metadata=metadata, logo=logo, branding=branding, fields=fields,
+        table_labels={"logs": ReportTableLabels(series_heading="Log")},
+        plots=plots, open_file=open_file,
+    )
 
 
 def anonymize(
