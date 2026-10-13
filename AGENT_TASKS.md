@@ -9,14 +9,14 @@ revised for medical readers and full branding. Wider module rollout is pending.
 ## Clinician Wording And Full Branding: Current Steps
 
 - [x] Record the new requirements in the plan for all current and future reports.
-- [ ] Replace raw JSON paths and technical table labels in the shared renderer.
-- [ ] Add plain medical wording for every Picket Fence field and nested coordinate.
-- [ ] Use clear leaf and picket labels without changing the attached measurements.
-- [ ] Add full brand controls for fonts, colours, charts, tables, titles, headers
+- [x] Replace raw JSON paths and technical table labels in the shared renderer.
+- [x] Add plain medical wording for every Picket Fence field and nested coordinate.
+- [x] Use clear leaf and picket labels without changing the attached measurements.
+- [x] Add full brand controls for fonts, colours, charts, tables, titles, headers
   and footers, alongside the existing logo option.
-- [ ] Regenerate the local pilot and record what was checked.
-- [ ] Add this requirement to the repository guide for future report adapters.
-- [ ] Prepare human wording and brand-review tasks. Do not complete human acceptance.
+- [x] Regenerate the local pilot and record what was checked.
+- [x] Add this requirement to the repository guide for future report adapters.
+- [x] Prepare human wording and brand-review tasks. Do not complete human acceptance.
 
 ## Plan And Coverage
 
@@ -29,14 +29,15 @@ revised for medical readers and full branding. Wider module rollout is pending.
 
 ## Shared Renderer And Pilot
 
-- [ ] Build an isolated renderer using ReportLab layout tools first. Keep the old
+- [x] Build an isolated renderer using ReportLab layout tools first. Keep the old
   canvas, analysis calculations, result schemas and plotting functions unchanged.
-- [ ] Build reusable sections, paged tables, nested-data rendering, artifact pages,
+- [x] Build reusable sections, paged tables, nested-data rendering, artifact pages,
   chart placement, warnings, bookmarks and local asset handling.
-- [ ] Capture one JSON snapshot and include every field in the report. Attach the
+- [x] Capture one JSON snapshot and include every field in the report. Attach the
   same JSON and keep its original numeric precision.
-- [ ] Add the keyword-only `detailed=False` option without moving existing arguments.
-- [ ] Deliver Picket Fence examples with full leaf/picket details and a large case.
+- [x] Add the keyword-only `detailed=False` option without moving existing arguments.
+- [x] Deliver local Picket Fence examples with medical wording and custom branding.
+- [ ] Deliver approved large and additional-variation Picket Fence examples.
 - [ ] Wait for human review before extending the pilot design to all modules.
 - [ ] If another PDF library is needed, document the trade-offs and request approval
   before adding or installing dependencies.
@@ -56,6 +57,19 @@ revised for medical readers and full branding. Wider module rollout is pending.
 - [ ] Prepare paired legacy/detailed examples and exact commands for human checks.
 - [ ] Ask before adding or running tests, builds, linters or screenshot checks;
   follow any required repository checks within the approved scope.
-- [ ] Document `detailed=True`, dependencies, supported cases and limitations in RST.
-- [ ] Update the repository guide if a new reporting package is introduced.
+- [x] Document the pilot's `detailed=True` and `branding` options in RST.
+- [x] Update the repository guide for the shared renderer and future adapters.
 - [ ] Record open issues and implementation status. Leave human acceptance unchecked.
+
+## Current Verification
+
+- [x] Render the default clinical pilot from the existing local documentation image.
+- [x] Render a branding example with custom title, fonts, colours, header and footer.
+- [x] Check editor diagnostics for the new renderer and Picket Fence changes.
+- [ ] Check the rendered text with a PDF parser; none is currently installed.
+- [ ] Complete repository formatting and documentation build gates when approved
+  tools are available. Do not install packages without human approval.
+- [ ] Complete regression checks and clinical acceptance with the human.
+
+The existing `save_histogram` type-annotation diagnostic is unchanged. No regression
+test suite, documentation build or screenshot review has been run by the agent.
