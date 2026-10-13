@@ -28,7 +28,7 @@ import os.path as osp
 import statistics
 import tempfile
 import webbrowser
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from itertools import zip_longest
 from pathlib import Path
@@ -1249,6 +1249,42 @@ class WinstonLutz2D(WLBaseImage, ResultsDataMixin[WinstonLutz2DResult]):
         self.plot(show=False)
         plt.tight_layout()
         plt.savefig(filename, **kwargs)
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: dict | None = None,
+        logo: Path | str | None = None,
+        *,
+        detailed: bool = True,
+        branding: Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish a complete detailed report of this individual image.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Review notes included in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : dict, optional
+            Site and review information.
+        logo : str or Path, optional
+            Local report logo.
+        detailed : bool
+            Must be True; this analysis had no legacy PDF report.
+        branding : mapping, optional
+            Full report identity; see :class:`~pylinac.core.reporting.ReportBranding`.
+        """
+        if not detailed:
+            raise ValueError("WinstonLutz2D has no legacy PDF. Use detailed=True.")
+        _publish_winston_lutz_report(self, filename, notes, metadata, logo, branding)
+        if open_file and isinstance(filename, (str, Path)):
+            webbrowser.open(str(filename))
 
     def _generate_results_data(self) -> WinstonLutz2DResult:
         """Present the results data and metadata as a dataclass or dict.
@@ -2716,6 +2752,9 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -2737,9 +2776,19 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete results, per-image artifacts and attached JSON.
+            False preserves the legacy PDF.
+        branding : mapping, optional
+            Full visual identity for the detailed report.
         """
         if not self._is_analyzed:
             raise ValueError("The set is not analyzed. Use .analyze() first.")
+        if detailed:
+            _publish_winston_lutz_report(self, filename, notes, metadata, logo, branding)
+            if open_file and isinstance(filename, (str, Path)):
+                webbrowser.open(str(filename))
+            return
         plt.ioff()
         title = "Winston-Lutz Analysis"
         canvas = pdf.PylinacCanvas(
@@ -3443,6 +3492,9 @@ class WinstonLutzMultiTargetMultiField(WinstonLutz):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -3464,9 +3516,19 @@ class WinstonLutzMultiTargetMultiField(WinstonLutz):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete combined and per-image results and image artifacts.
+            False preserves the legacy PDF.
+        branding : mapping, optional
+            Full visual identity for the detailed report.
         """
         if not self._is_analyzed:
             raise ValueError("The set is not analyzed. Use .analyze() first.")
+        if detailed:
+            _publish_winston_lutz_report(self, filename, notes, metadata, logo, branding)
+            if open_file and isinstance(filename, (str, Path)):
+                webbrowser.open(str(filename))
+            return
         plt.ioff()
         title = "Winston-Lutz Multi-BB Analysis"
         canvas = pdf.PylinacCanvas(
@@ -3491,6 +3553,158 @@ class WinstonLutzMultiTargetMultiField(WinstonLutz):
 
         if open_file:
             webbrowser.open(filename)
+
+
+def _publish_winston_lutz_report(
+    analysis: WinstonLutz | WinstonLutz2D,
+    filename: str | Path | BinaryIO,
+    notes: str | Sequence[str] | None,
+    metadata: dict | None,
+    logo: Path | str | None,
+    branding: Mapping[str, object] | None,
+) -> None:
+    from .core.reporting import DetailedReport, ReportField, ReportTableLabels
+
+    data = analysis.results_data()
+    images = [analysis] if isinstance(analysis, WinstonLutz2D) else analysis.images
+    multi_target = isinstance(analysis, WinstonLutzMultiTargetMultiField)
+    variation = (
+        "Single image" if isinstance(analysis, WinstonLutz2D)
+        else "Multi-target, multi-field" if multi_target else "Multi-image, single target"
+    )
+    labels = {
+        "num_total_images": "Number of analysed images",
+        "num_gantry_images": "Number of gantry-axis images",
+        "num_coll_images": "Number of collimator-axis images",
+        "num_couch_images": "Number of couch-axis images",
+        "num_gantry_coll_images": "Number of gantry and collimator images",
+        "max_2d_cax_to_bb_mm": "Largest field-centre to BB distance (mm)",
+        "median_2d_cax_to_bb_mm": "Median field-centre to BB distance (mm)",
+        "mean_2d_cax_to_bb_mm": "Mean field-centre to BB distance (mm)",
+        "max_2d_cax_to_epid_mm": "Largest field-centre to panel-centre distance (mm)",
+        "median_2d_cax_to_epid_mm": "Median field-centre to panel-centre distance (mm)",
+        "mean_2d_cax_to_epid_mm": "Mean field-centre to panel-centre distance (mm)",
+        "gantry_3d_iso_diameter_mm": "Gantry 3D isocentre diameter (mm)",
+        "coll_2d_iso_diameter_mm": "Collimator 2D isocentre diameter (mm)",
+        "couch_2d_iso_diameter_mm": "Couch 2D isocentre diameter (mm)",
+        "gantry_coll_3d_iso_diameter_mm": "Gantry and collimator 3D isocentre diameter (mm)",
+        "bb_shift_vector": "Phantom translation to isocentre (mm)",
+        "virtual_shift_applied": "Virtual translation applied to the BB (mm)",
+        "image_details": "Individual image measurements",
+        "keyed_image_details": "Image measurements identified by machine angles",
+        "max_2d_field_to_bb_mm": "Largest field-centre to BB distance (mm)",
+        "median_2d_field_to_bb_mm": "Median field-centre to BB distance (mm)",
+        "mean_2d_field_to_bb_mm": "Mean field-centre to BB distance (mm)",
+        "bb_arrangement": "Nominal BB arrangement",
+        "bb_maxes": "Largest field-centre distance for each BB (mm)",
+        "bb_shift_yaw": "Phantom yaw correction (degrees)",
+        "bb_shift_pitch": "Phantom pitch correction (degrees)",
+        "bb_shift_roll": "Phantom roll correction (degrees)",
+        "variable_axis": "Machine axis varied",
+        "bb_location": "Detected BB location in the image (pixels)",
+        "field_cax": "Detected field centre in the image (pixels)",
+        "cax2bb_vector": "Field-centre to BB displacement (mm)",
+        "cax2epid_vector": "Field-centre to panel-centre displacement (mm)",
+        "cax2bb_distance": "Field-centre to BB distance (mm)",
+        "cax2epid_distance": "Field-centre to panel-centre distance (mm)",
+        "image_name": "Image identifier",
+        "gantry_angle": "Gantry angle (degrees)",
+        "collimator_angle": "Collimator angle (degrees)",
+        "couch_angle": "Couch angle (degrees)",
+        "bb_distances": "Field-centre distance for each BB (mm)",
+        "couch_yaw_error": "Couch yaw error (degrees)",
+    }
+    for axis, name in (("gantry", "Gantry"), ("coll", "Collimator"), ("couch", "Couch"), ("epid", "Panel")):
+        for statistic, wording in (("rms", "root-mean-square"), ("rss", "root-sum-square")):
+            labels[f"max_{axis}_{statistic}_deviation_mm"] = (
+                f"Largest {name.lower()} {wording} deviation (mm)"
+            )
+    fields = {
+        (key,): ReportField(label, decimal_places=1 if "degrees" in label else 3)
+        for key, label in labels.items()
+    }
+    for prefix in ((), ("image_details", "*"), ("keyed_image_details", "*")):
+        for key, label in labels.items():
+            fields[prefix + (key,)] = ReportField(
+                label, decimal_places=1 if "degrees" in label else 3
+            )
+        for key in ("bb_location", "field_cax"):
+            for coordinate, wording in (("x", "Horizontal image position"), ("y", "Vertical image position"), ("z", "Recorded depth coordinate")):
+                fields[prefix + (key, coordinate)] = ReportField(
+                    f"{wording} (pixels)", decimal_places=1
+                )
+        for key in ("cax2bb_vector", "cax2epid_vector"):
+            for coordinate in ("x", "y", "z"):
+                fields[prefix + (key, coordinate)] = ReportField(
+                    f"Image displacement, {coordinate.upper()} component (mm)", decimal_places=3
+                )
+        fields[prefix + ("bb_distances", "*")] = ReportField(
+            "BB distance from its matched field centre (mm)",
+            missing_label="Not matched", decimal_places=3,
+        )
+    for key in ("bb_shift_vector", "virtual_shift_applied"):
+        for coordinate in ("x", "y", "z"):
+            fields[(key, coordinate)] = ReportField(
+                f"Translation, {coordinate.upper()} component (mm)", decimal_places=3
+            )
+    for key, label in {
+        "name": "BB identifier", "offset_left_mm": "Nominal left offset (mm)",
+        "offset_up_mm": "Nominal up offset (mm)", "offset_in_mm": "Nominal in offset (mm)",
+        "bb_size_mm": "BB diameter (mm)", "rad_size_mm": "Nominal radiation field size (mm)",
+    }.items():
+        fields[("bb_arrangement", "*", key)] = ReportField(label, decimal_places=2)
+    report = DetailedReport(
+        title="Winston-Lutz Analysis",
+        results=data,
+        context={"Analysis variation": variation, "Number of input images": len(images),
+                 "Input images": [img.base_path for img in images]},
+        notes=notes, metadata=metadata, logo=logo, branding=branding, fields=fields,
+        table_labels={
+            "image_details": ReportTableLabels(series_heading="Image"),
+            "keyed_image_details": ReportTableLabels(row_heading="Image"),
+            "bb_arrangement": ReportTableLabels(series_heading="BB"),
+            "bb_maxes": ReportTableLabels(row_heading="BB", value_heading="Distance (mm)"),
+        },
+    )
+    details = report.values.get("image_details")
+    categories: list[str] = []
+    distances: list[float] = []
+    if isinstance(details, list):
+        for index, item in enumerate(details, 1):
+            if not isinstance(item, dict):
+                continue
+            values = item.get("bb_distances") if multi_target else {"BB": item.get("cax2bb_distance")}
+            if isinstance(values, dict):
+                for name, value in values.items():
+                    if isinstance(value, (int, float)) and math.isfinite(value):
+                        categories.append(f"{index}: {name}" if multi_target else str(index))
+                        distances.append(float(value))
+    else:
+        value = report.values.get("cax2bb_distance")
+        if isinstance(value, (int, float)) and math.isfinite(value):
+            categories, distances = ["1"], [float(value)]
+    if distances:
+        report.add_bar_chart(
+            "Field-centre to BB distances by image", categories, distances,
+            "Distance (mm)", "Image number and BB" if multi_target else "Image number",
+            decimal_places=3,
+            caption="Distances use the recorded results. Unmatched BBs have no bar and remain in the detailed measurements. No acceptance tolerance is inferred.",
+        )
+    for index, img in enumerate(images, 1):
+        caption = (
+            f"Image {index}: {img.base_path}. Gantry {img.gantry_angle:.1f}, "
+            f"collimator {img.collimator_angle:.1f}, couch {img.couch_angle:.1f} degrees. "
+            "Coordinates are image pixels. Field-centre, BB and panel-centre overlays retain the existing analysis."
+        )
+        report.add_matplotlib_artifact(
+            f"Image {index}: {img.base_path}",
+            lambda axes, img=img: img.plot(ax=axes, show=False, zoom=False), caption,
+        )
+        report.add_matplotlib_artifact(
+            f"Image {index}: BB detail",
+            lambda axes, img=img: img.plot(ax=axes, show=False, zoom=True), caption,
+        )
+    report.write(filename)
 
 
 # class WinstonLutzMultiTargetSingleFieldImage(WinstonLutzMultiTargetMultiFieldImage):
