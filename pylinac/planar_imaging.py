@@ -1146,12 +1146,13 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
             ("percent_integral_uniformity",): ReportField("Integral image uniformity (%)", decimal_places=1),
         }
         mammography = isinstance(self, ACRDigitalMammography)
+        plot_options = {} if isinstance(self, StandardImagingFC2) else {"split_plots": True}
         publish_analysis_report(
             self.results_data(), filename, title=f"{self.common_name} Phantom Analysis",
             context={"Phantom model": self.common_name, "Image identifier": self.image.base_path},
             notes=notes, metadata=metadata, logo=logo, branding=branding, fields=fields,
             table_labels={"low_contrast_rois": ReportTableLabels(series_heading="Region")},
-            plots=None if mammography else {"Phantom image and measurements": lambda: self.plot_analyzed_image(show=False, split_plots=True)},
+            plots=None if mammography else {"Phantom image and measurements": lambda: self.plot_analyzed_image(show=False, **plot_options)},
             artifact_streams=(lambda: self.save_analyzed_image(to_stream=True)) if mammography else None,
             open_file=open_file,
         )
