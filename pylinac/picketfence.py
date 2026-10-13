@@ -1656,24 +1656,29 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             ("tolerance_mm",): ReportField(
                 "Leaf-position tolerance (mm)",
                 "Maximum permitted distance between a measured leaf position and its reference picket.",
+                decimal_places=3,
             ),
             ("action_tolerance_mm",): ReportField(
                 "Action tolerance (mm)",
                 "Optional action threshold supplied for this analysis.",
                 missing_label="Not set",
+                decimal_places=3,
             ),
             ("percent_leaves_passing",): ReportField(
                 "Leaves within tolerance (%)",
                 "Percentage of analysed leaves that meet the selected position tolerance.",
+                decimal_places=1,
             ),
             ("number_of_pickets",): ReportField("Number of measured pickets"),
             ("absolute_median_error_mm",): ReportField(
                 "Median absolute leaf-position error (mm)",
                 "Median positioning error across all measured leaves, ignoring the direction of the error.",
+                decimal_places=3,
             ),
             ("max_error_mm",): ReportField(
                 "Largest leaf-position error (mm)",
                 "Largest absolute positioning error in the measured leaf positions.",
+                decimal_places=3,
             ),
             ("max_error_picket",): ReportField(
                 "Picket with the largest error",
@@ -1685,11 +1690,12 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
                 "Leaf or leaf-pair identifier with the largest measured positioning error.",
             ),
             ("mean_picket_spacing_mm",): ReportField(
-                "Average distance between pickets (mm)"
+                "Average distance between pickets (mm)", decimal_places=2
             ),
             ("offsets_from_cax_mm",): ReportField(
                 "Picket positions relative to the central axis (mm)",
                 "Distance of each picket from the central axis. Positive values follow the analysis convention, to the left.",
+                decimal_places=2,
             ),
             ("passed",): ReportField(
                 "Overall test result",
@@ -1702,22 +1708,27 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             ("mlc_skew",): ReportField(
                 "Multileaf collimator rotation (degrees)",
                 "Rotation of the leaf pattern relative to the nearest horizontal or vertical image direction.",
+                decimal_places=1,
             ),
             ("picket_widths",): ReportField(
                 "Measured picket widths",
                 "Minimum, maximum, average and median widths are reported in millimetres for each picket.",
+                decimal_places=2,
             ),
             ("mlc_positions_by_leaf",): ReportField(
                 "Leaf positions relative to the central axis (mm)",
                 "Measured leaf positions in recorded order. Distances are in millimetres from the central axis, with positive values to the left.",
+                decimal_places=2,
             ),
             ("mlc_errors_by_leaf",): ReportField(
                 "Leaf-position errors (mm)",
                 "Signed distance between each measured leaf position and its reference picket. Measurements remain in their recorded order.",
+                decimal_places=3,
             ),
             ("cax",): ReportField(
                 "Central axis location",
                 "Coordinates are measured in image pixels, not patient anatomy. The depth coordinate is retained as recorded; a planar image does not measure depth.",
+                decimal_places=1,
             ),
             ("cax", "x"): ReportField("Horizontal image position (pixels)"),
             ("cax", "y"): ReportField("Vertical image position (pixels)"),
@@ -1725,6 +1736,12 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             ("warnings",): ReportField(
                 "Analysis warnings",
                 "Warnings recorded during image measurement. Review these before accepting the result.",
+            ),
+            ("Gantry angle (degrees)",): ReportField(
+                "Gantry angle (degrees)", decimal_places=1
+            ),
+            ("Collimator angle (degrees)",): ReportField(
+                "Collimator angle (degrees)", decimal_places=1
             ),
         }
         report = DetailedReport(
@@ -1851,6 +1868,7 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             "MLC leaf identifier",
             limits=limits,
             highlighted=failed_names,
+            decimal_places=3,
             caption="Each bar is the largest absolute error in that leaf's recorded "
             "measurements. Asterisks identify failed leaves from the analysis. "
             "All measured errors and positions are listed in the detailed measurements. "
@@ -1861,6 +1879,7 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             [value for values in leaf_errors.values() for value in values],
             bins=bins,
             measurement_label="Error interval (mm)",
+            decimal_places=3,
             caption="All measured leaf-position errors are included. Negative and positive "
             "values retain their original sign. Intervals include the left boundary; "
             "only the final interval includes its right boundary.",
