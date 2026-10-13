@@ -8,6 +8,7 @@ import math
 import re
 import webbrowser
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
 from enum import Enum
@@ -316,6 +317,27 @@ def _model_report_fields(
     return fields
 
 
+@contextmanager
+def _report_plot_scope() -> Iterator[set[int]]:
+    from matplotlib import pyplot as plt
+
+    previous = set(plt.get_fignums())
+    current = plt.gcf().number if previous else None
+    interactive = plt.isinteractive()
+    plt.ioff()
+    try:
+        yield previous
+    finally:
+        for number in set(plt.get_fignums()) - previous:
+            plt.close(number)
+        if interactive:
+            plt.ion()
+        else:
+            plt.ioff()
+        if current is not None and current in plt.get_fignums():
+            plt.figure(current)
+
+
 def publish_analysis_report(
     results: BaseModel | Mapping[str, object],
     filename: str | Path | BinaryIO,
@@ -330,6 +352,7 @@ def publish_analysis_report(
     table_labels: Mapping[str, ReportTableLabels] | None = None,
     plots: Mapping[str, Callable[[], object]] | None = None,
     artifact_streams: Callable[[], Iterable[tuple[str, BinaryIO]]] | None = None,
+    scan_images: Sequence[str] = (),
     chart_fields: Sequence[str] = (),
     open_file: bool = False,
 ) -> None:
@@ -361,6 +384,9 @@ def publish_analysis_report(
     artifact_streams : callable, optional
         Yield named, report-owned image streams. Each is read and closed before
         requesting the next artifact, for large or incremental exports.
+    scan_images : sequence of str
+        Original CT/MRI input basenames, listed in recorded scan order. These
+        identifiers are paginated separately from the measurement snapshot.
     chart_fields : sequence of str
         Scalar result fields requiring their own measurement visual. Units are
         taken from the supplied field labels, never inferred from the values.
@@ -378,6 +404,13 @@ def publish_analysis_report(
         title=title, results=model, context=context, notes=notes, metadata=metadata,
         logo=logo, branding=branding, fields=presentation, table_labels=table_labels,
     )
+    if scan_images:
+        report.add_table(
+            "Input scan images",
+            ("Scan image", "Input image identifier"),
+            ((index, name) for index, name in enumerate(scan_images, 1)),
+            (CONTENT_WIDTH * 0.18, CONTENT_WIDTH * 0.82),
+        )
     for key in chart_fields:
         value = report.values.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
@@ -389,103 +422,16 @@ def publish_analysis_report(
     for name, plot in (plots or {}).items():
         report.add_plot_artifacts(name, plot)
     if artifact_streams is not None:
-        for name, stream in artifact_streams():
-            try:
-                stream.seek(0)
-                report.add_artifact(name, stream.read(), f"{name}. Existing analysis overlays and measurement scales are retained.")
-            finally:
-                stream.close()
+        with _report_plot_scope():
+            for name, stream in artifact_streams():
+                try:
+                    stream.seek(0)
+                    report.add_artifact(name, stream.read(), f"{name}. Existing analysis overlays and measurement scales are retained.")
+                finally:
+                    stream.close()
     report.write(filename)
     if open_file and isinstance(filename, (str, Path)):
         webbrowser.open(str(filename))
-
-
-def publish_calibration_report(
-    analysis: object,
-    filename: str | Path | BinaryIO,
-    *,
-    title: str,
-    notes: str | Sequence[str] | None = None,
-    metadata: Mapping[str, object] | None = None,
-    logo: Path | str | None = None,
-    branding: Mapping[str, object] | None = None,
-    open_file: bool = False,
-) -> None:
-    """Snapshot calibration inputs and existing calculated dose properties.
-
-    Parameters
-    ----------
-    analysis : object
-        An existing TG-51 or TRS-398 calibration instance.
-    filename : str, Path or binary stream
-        Report destination.
-    title : str
-        Calibration protocol and beam variation.
-    notes : str or sequence of str, optional
-        Review notes.
-    metadata : mapping, optional
-        Site and review information.
-    logo : str or Path, optional
-        Local logo.
-    branding : mapping, optional
-        Complete visual identity.
-    open_file : bool
-        Open file destinations after publishing.
-    """
-    snapshot = {name: value for name, value in vars(analysis).items() if not name.startswith("_")}
-    adjusted = bool(getattr(analysis, "output_was_adjusted"))
-    computed = (
-        "p_tp", "p_ion", "p_pol", "k_tp", "k_pol", "k_s", "m_corrected",
-        "pddx", "kq", "r_50", "dref", "zref", "pq_gr", "output_was_adjusted",
-        "dose_mu_10", "dose_mu_dref", "dose_mu_dmax", "dose_mu_zref", "dose_mu_zmax",
-        "m_corrected_adjustment", "m_corrected_adjusted", "dose_mu_10_adjusted",
-        "dose_mu_dref_adjusted", "dose_mu_dmax_adjusted", "dose_mu_zref_adjusted", "dose_mu_zmax_adjusted",
-    )
-    for name in computed:
-        if any(name in parent.__dict__ for parent in type(analysis).__mro__):
-            snapshot[name] = None if not adjusted and (name.endswith("_adjusted") or name == "m_corrected_adjustment") else getattr(analysis, name)
-    labels = {
-        "institution": "Institution", "physicist": "Physicist", "unit": "Treatment unit",
-        "measurement_date": "Measurement date", "temp": "Temperature (degrees Celsius)",
-        "press": "Pressure (kPa)", "chamber": "Ionisation chamber and calibration coefficients",
-        "n_dw": "Absorbed-dose calibration factor (as supplied)", "electrometer": "Electrometer",
-        "energy": "Nominal beam energy (MeV)" if "Electron" in type(analysis).__name__ else "Nominal beam energy (MV)",
-        "voltage_reference": "Reference voltage (V)", "voltage_reduced": "Reduced voltage (V)",
-        "m_reference": "Reference-voltage chamber readings (nC)",
-        "m_opposite": "Opposite-polarity chamber readings (nC)",
-        "m_reduced": "Reduced-voltage chamber readings (nC)",
-        "m_gradient": "Gradient chamber readings (nC)",
-        "m_reference_adjusted": "Adjusted reference-voltage chamber readings (nC)",
-        "mu": "Delivered monitor units", "tissue_correction": "Tissue correction factor",
-        "m_corrected": "Corrected chamber reading (nC)",
-        "m_corrected_adjustment": "Adjusted corrected chamber reading (nC)",
-        "m_corrected_adjusted": "Adjusted corrected chamber reading (nC)",
-        "p_tp": "Temperature and pressure correction factor", "k_tp": "Temperature and pressure correction factor",
-        "p_ion": "Ion collection correction factor", "k_s": "Ion collection correction factor",
-        "p_pol": "Polarity correction factor", "k_pol": "Polarity correction factor",
-        "p_elec": "Electrometer correction factor", "k_elec": "Electrometer correction factor",
-        "kq": "Beam-quality correction factor", "k_ecal": "Electron calibration correction factor",
-        "pq_gr": "Gradient correction factor", "r_50": "Depth of 50% dose (cm)",
-        "i_50": "Depth of 50% ionisation (cm)", "dref": "Reference depth (cm)", "zref": "Reference depth (cm)",
-        "pddx": "Photon-only depth dose at 10 cm (%)", "measured_pdd10": "Measured depth dose at 10 cm (%)",
-        "clinical_pdd10": "Clinical depth dose at 10 cm (%)", "clinical_pdd": "Clinical depth dose (%)",
-        "clinical_pdd_zref": "Clinical depth dose at reference depth (%)",
-        "clinical_tmr_zref": "Clinical tissue-maximum ratio at reference depth",
-        "tpr2010": "Tissue-phantom ratio at 20 cm to 10 cm", "fff": "Flattening-filter-free beam",
-        "cone": "Electron applicator", "lead_foil": "Lead-foil arrangement", "setup": "Calibration setup",
-        "output_was_adjusted": "Output was adjusted",
-    }
-    for key in snapshot:
-        if key.startswith("dose_mu_"):
-            depth = {"10": "10 cm", "dref": "reference depth", "dmax": "dose-maximum depth", "zref": "reference depth", "zmax": "dose-maximum depth"}.get(key.removeprefix("dose_mu_").removesuffix("_adjusted"), "recorded depth")
-            labels[key] = f"{'Adjusted dose' if key.endswith('_adjusted') else 'Dose'} per monitor unit at {depth} (cGy/MU)"
-    publish_analysis_report(
-        snapshot, filename, title=title, notes=notes, metadata=metadata,
-        logo=logo, branding=branding,
-        fields={(key,): ReportField(label, decimal_places=3) for key, label in labels.items()},
-        chart_fields=tuple(key for key in snapshot if key.startswith("dose_mu_")),
-        open_file=open_file,
-    )
 
 
 class DetailedReport:
@@ -884,11 +830,8 @@ class DetailedReport:
         """
         from matplotlib import pyplot as plt
 
-        previous = set(plt.get_fignums())
-        current = plt.gcf().number if previous else None
-        interactive = plt.isinteractive()
-        plt.figure(figsize=(8, 8))
-        try:
+        with _report_plot_scope() as previous:
+            plt.figure(figsize=(8, 8))
             result = plot()
             names: dict[int, str] = {}
             if isinstance(result, Mapping):
@@ -909,15 +852,6 @@ class DetailedReport:
                     self.add_artifact(name, buffer.getvalue(), f"{name}. Existing analysis overlays and measurement scales are retained.")
             if not count:
                 raise RuntimeError(f"The analysis did not produce an artifact for '{title}'.")
-        finally:
-            for number in set(plt.get_fignums()) - previous:
-                plt.close(number)
-            if interactive:
-                plt.ion()
-            else:
-                plt.ioff()
-            if current is not None and current in plt.get_fignums():
-                plt.figure(current)
 
     def add_bar_chart(
         self,
