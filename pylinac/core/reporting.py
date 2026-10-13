@@ -56,6 +56,8 @@ class ReportBranding(BaseModel):
     ----------
     name : str
         Report owner shown in the page header and PDF author metadata.
+    logo : str or Path, optional
+        Local custom logo. The separate ``logo`` report argument takes precedence.
     report_title : str, optional
         Custom title. The analysis name is used when no title is supplied.
     header_text, footer_text : str
@@ -76,6 +78,7 @@ class ReportBranding(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     name: str = "Pylinac"
+    logo: Path | str | None = None
     report_title: str | None = None
     header_text: str = "Medical physics quality assurance"
     footer_text: str | None = None
@@ -451,7 +454,8 @@ class DetailedReport:
     notes : str or sequence of str, optional
         User-supplied notes.
     logo : Path or str, optional
-        Local custom logo. The default logo is used only when packaged locally.
+        Local custom logo, overriding ``branding.logo`` when both are supplied.
+        The default logo is used only when packaged locally.
     fields : mapping, optional
         Clinical wording keyed by structured field components. A ``"*"``
         component matches a measurement identifier or list entry.
@@ -582,6 +586,7 @@ class DetailedReport:
                 textColor=self._muted,
             )
         )
+        logo = logo if logo is not None else self.branding.logo
         self._logo = Path(logo) if logo is not None else None
         if self._logo is not None and not self._logo.is_file():
             raise FileNotFoundError(f"Report logo does not exist: {self._logo}")
