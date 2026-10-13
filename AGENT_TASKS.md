@@ -19,6 +19,32 @@ Use only the supplied local folder `E:\dcms-20261013T142612Z-1-001\dcms`.
 Do not download data or install dependencies. The human explicitly declined
 content checks; tests, builds, linters and screenshots remain human-owned.
 
+## ARTBackend Integration: 2026-10-13
+
+The human requested replacement of the existing PDF generator in the sibling
+`ARTBackend` repository, assuming manual deployment of this custom pylinac.
+This integration does not change this library's legacy defaults or analysis code.
+
+- [x] Route the fourteen existing supported imaging PDF services through one
+      shared publisher with `detailed=True` and full Pro-ART branding.
+- [x] Reuse the backend's logo and configure the report identity, teal tables,
+      blue charts, header and footer centrally. Keep analysis-specific titles.
+- [x] Preserve response keys, base64 payloads, JSON results and temporary cleanup.
+      Leave nuclear, machine-log, PET, ultrasound and PDF-free workflows unchanged.
+- [x] Reject a legacy-only pylinac build without silently generating an old PDF.
+- [x] Document manual deployment after backend requirements and the required restart.
+- [x] Run seven backend-only regression checks against the custom checkout.
+- [x] Run an offline synthetic Picket Fence service smoke check with `crop_mm=0`.
+      Verify PDF author metadata, embedded JSON, base64 aliases and cleanup.
+- [x] Record that no packages were installed and no source-library test suite,
+      content checks or clinical acceptance were performed for this integration.
+
+The default editor interpreter still imports stock pylinac. The supplied image
+folder is unavailable on this machine, so real-input and visual review remain
+pending. `uv`, `uvx` and `prek` are unavailable; the backend whitespace diff check
+passed. The pre-existing omitted-`crop_mm` failure remains unchanged and documented.
+Human deployment and acceptance tasks are in [HUMAN_TASKS.md](HUMAN_TASKS.md).
+
 ## Logo Customization: 2026-10-13
 
 - [x] Confirm the existing `logo=` argument reaches the shared detailed renderer,
