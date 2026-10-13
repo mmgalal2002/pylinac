@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from typing import Any
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 import scipy.signal as sps
@@ -162,6 +163,33 @@ def symmetrical_sharp_sigmoidal_21_profile() -> np.array:
 
 
 class TestProfileGeneric(TestCase):
+    @parameterized.expand([("x_at_x_idx", "UnivariateSpline"), ("x_at_y", "interp1d")])
+    def test_array_coordinates_evaluate_interpolator_once(
+        self, method_name, interpolator_name
+    ):
+        profile = FWXMProfile(create_simple_9_profile())
+        profile.center_idx
+        expected = np.array([1.5, 2.5])
+        with patch(f"pylinac.core.profile.{interpolator_name}") as factory:
+            factory.return_value.return_value = expected
+            kwargs = {"side": "left"} if method_name == "x_at_y" else {}
+            result = getattr(profile, method_name)(expected, **kwargs)
+        np.testing.assert_array_equal(result, expected)
+        self.assertEqual(factory.return_value.call_count, 1)
+
+    def test_coordinate_values_and_return_types_are_unchanged(self):
+        profile = FWXMProfile(create_simple_9_profile())
+        positions = np.array([1.5, 2.5])
+        np.testing.assert_array_equal(profile.x_at_x_idx(positions), positions)
+        np.testing.assert_array_equal(profile.x_at_y(positions, "left"), positions)
+        np.testing.assert_array_equal(
+            profile.x_at_y(positions, "right"), np.array([6.5, 5.5])
+        )
+        self.assertIsInstance(profile.x_at_x_idx(1.5), float)
+        self.assertEqual(profile.x_at_x_idx(1.5), 1.5)
+        self.assertIsInstance(profile.x_at_y(1.5, "left"), float)
+        self.assertEqual(profile.x_at_y(1.5, "left"), 1.5)
+
     def test_ground(self) -> None:
         offset_array = create_simple_9_profile() + 1
         self.assertEqual(offset_array.min(), 1)
@@ -2783,6 +2811,43 @@ class CollapsedCircleProfileStarshot(CircleProfileTestMixin, TestCase):
 
 
 class TestStretchDeprecation(TestCase):
+    @parameterized.expand(
+        [
+            (np.uint8, 0, 1, None),
+            (np.uint16, 5, 2, None),
+            (np.int16, -5, 12, None),
+            (np.float32, 0, 255, None),
+            (np.float64, -3, -1, None),
+            (np.float32, 3, 1, np.uint8),
+            (np.uint16, 0, 1, np.int16),
+            (np.float64, 0, 1, np.float32),
+        ]
+    )
+    def test_stretch_preserves_values_dtype_input_and_warning(
+        self, dtype, minimum, maximum, fill_dtype
+    ):
+        array = np.array([[1, 3, 5], [2, 8, 9]], dtype=dtype)
+        original = array.copy()
+        expected = (array - array.min()) / (array.max() - array.min())
+        new_max = maximum
+        if fill_dtype is not None:
+            try:
+                new_max = np.iinfo(fill_dtype).max
+            except ValueError:
+                new_max = np.finfo(fill_dtype).max
+        expected *= new_max
+        if fill_dtype:
+            expected = expected.astype(fill_dtype)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            actual = stretch(array, min=minimum, max=maximum, fill_dtype=fill_dtype)
+        np.testing.assert_array_equal(actual, expected)
+        np.testing.assert_array_equal(array, original)
+        self.assertEqual(actual.dtype, expected.dtype)
+        self.assertEqual(len(caught), 1)
+        self.assertIs(caught[0].category, DeprecationWarning)
+        self.assertIn("Using stretch from the profile module", str(caught[0].message))
+
     def test_stretch_deprecation(self):
         arr = np.array([0, 2, 5, 10], dtype=np.uint8)
         with warnings.catch_warnings(record=True) as w:
