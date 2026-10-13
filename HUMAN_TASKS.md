@@ -18,6 +18,33 @@ approved, and instructed the agent to proceed with the full report plan. This is
 a record of the human's decision, not acceptance performed by the agent. Other
 analyses and unreviewed variations remain pending.
 
+## Confirmed Imaging Scope: 2026-10-13
+
+- [x] Human limited this rollout to X-ray imaging, MRI, CT and mammography.
+- [x] Human supplied `E:\dcms-20261013T142612Z-1-001\dcms` for local generation.
+- [x] Human declined content checks and dependency installation.
+
+Nuclear medicine, machine logs, calibration and non-image device workflows are
+excluded. The agent removed its earlier out-of-scope additions. Existing methods
+for those workflows were not replaced.
+
+## Imaging Report Review
+
+The implementation/example status of every class is in
+[AGENT_TASKS.md](AGENT_TASKS.md). Standard and branded review PDFs and per-class
+generation records are in `E:\dcms-20261013T142612Z-1-001\detailed-reports`.
+
+- [ ] Review every generated X-ray, CT, MRI and mammography report pair.
+- [ ] Confirm the supplied image was analysed with the correct phantom class,
+      setup, orientation, scale and clinical parameters.
+- [ ] Review both large and small mammography reports, including all mass,
+      speck-group, fibre and zoomed artifacts.
+- [ ] Supply the correct Starshot SID and matching data for awaiting-input rows.
+- [ ] Resolve input detection for ACR CT and IBA Primus with approved data/settings.
+- [ ] Run content checks, documentation build and regression checks when desired.
+- [ ] Accept each new report and variation separately. Picket Fence pilot approval
+      is not acceptance of the new reports or regenerated examples.
+
 ## Detailed PDF Reports: Decisions
 
 Plan: [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md).
