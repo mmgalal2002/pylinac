@@ -8,6 +8,27 @@ human confirmed that Picket Fence custom PDF generation was tested and approved,
 including the pilot design. Wider module rollout is now authorized and in progress.
 Approval applies to Picket Fence only, not to unreviewed reports or variations.
 
+## Current Scope
+
+The human narrowed the rollout on 2026-10-13 to **X-ray imaging, MRI, CT and
+mammography only**. Nuclear medicine, calibration, machine-log and non-image
+device reports are excluded. Their existing APIs remain unchanged; additions
+made earlier in this session were removed. They are not pending rollout tasks.
+
+Use only the supplied local folder `E:\dcms-20261013T142612Z-1-001\dcms`.
+Do not download data or install dependencies. The human explicitly declined
+content checks; tests, builds, linters and screenshots remain human-owned.
+
+## Rollout Summary
+
+- 47 concrete imaging analyses have detailed-report adapters.
+- 31 analyses generated standard and branded reports: 62 PDFs in total.
+- 14 analyses await matching input data or required clinical settings.
+- 2 supplied cases fail during analysis before PDF generation: ACR CT and IBA Primus.
+- 18 non-imaging workflows are explicitly excluded by the revised scope.
+- Only the original Picket Fence pilot is human-approved. New report examples
+      and all unreviewed variations still require human acceptance.
+
 ## Display Rounding: Current Steps
 
 - [x] Configure clinical precision for errors, distances, percentages, angles
@@ -37,10 +58,11 @@ Approval applies to Picket Fence only, not to unreviewed reports or variations.
 ## Plan And Coverage
 
 - [x] Create the Markdown plan and separate agent and human checklists.
-- [ ] Audit report entry points, result models, artifacts and every analysis variation.
-- [ ] Add a complete coverage matrix to the plan. Mark gaps clearly; do not exclude
+- [x] Audit concrete imaging classes, inherited/overridden PDF entry points,
+      result models and available artifacts. Keep variation verification separate.
+- [x] Add a complete class/variation coverage matrix to the plan. Mark gaps clearly; do not exclude
       modules because they lack a current PDF or JSON method.
-- [ ] Record the new API for modules without `publish_pdf()` and preserve old APIs.
+- [x] Record the new API for analyses without `publish_pdf()` and retain old defaults.
 - [ ] Record the page design and measurable acceptance rules from the plan.
 
 ## Shared Renderer And Pilot
@@ -61,8 +83,8 @@ Approval applies to Picket Fence only, not to unreviewed reports or variations.
 ## All Tests And Variations
 
 - [x] Record human authorization to proceed with the complete report plan.
-- [ ] Deliver a multi-image Winston-Lutz pilot with per-image and combined results.
-- [ ] Add a small adapter for every remaining analysis family and variation.
+- [x] Deliver a multi-image Winston-Lutz pilot with per-image and combined results.
+- [x] Add an adapter for every concrete analysis class in the imaging-only scope.
 - [ ] Give each variant clear charts or analysis visuals and readable artifacts.
 - [ ] Handle missing values, warnings, long arrays, large image sets and custom metadata.
 - [ ] Preserve file/stream behaviour, notes, logos, existing options and `open_file`.
@@ -71,80 +93,103 @@ Approval applies to Picket Fence only, not to unreviewed reports or variations.
 ## Per-Analysis Implementation Progress
 
 Updated 2026-10-13. "Implemented" means the opt-in adapter is written, not that
-its report has been rendered, tested or human-approved. Examples and acceptance
-remain pending for every new adapter. Inherited adapters count only when the
+its report has been rendered, tested or human-approved. Example generation is
+recorded separately; human acceptance remains pending for every new adapter.
+Inherited adapters count only when the
 subclass does not override the report entry point.
 
-| QA analysis                      | Adapter     | Generated example          | Human acceptance |
-| -------------------------------- | ----------- | -------------------------- | ---------------- |
-| PicketFence                      | Implemented | Standard and branded pilot | Approved pilot   |
-| WinstonLutz2D                    | Implemented | Pending                    | Pending          |
-| WinstonLutz                      | Implemented | Pending                    | Pending          |
-| WinstonLutzMultiTargetMultiField | Implemented | Pending                    | Pending          |
-| Starshot                         | Implemented | Pending                    | Pending          |
-| DRGS                             | Implemented | Pending                    | Pending          |
-| DRCS                             | Implemented | Pending                    | Pending          |
-| DRMLC                            | Implemented | Pending                    | Pending          |
-| FieldAnalysis                    | Implemented | Pending                    | Pending          |
-| DeviceFieldAnalysis              | Implemented | Pending                    | Pending          |
-| FieldProfileAnalysis             | Implemented | Pending                    | Pending          |
-| StandardImagingFC2               | Implemented | Pending                    | Pending          |
-| IMTLRad                          | Implemented | Pending                    | Pending          |
-| DoselabRLf                       | Implemented | Pending                    | Pending          |
-| IsoAlign                         | Implemented | Pending                    | Pending          |
-| SNCFSQA                          | Implemented | Pending                    | Pending          |
-| LasVegas                         | Implemented | Pending                    | Pending          |
-| ElektaLasVegas                   | Implemented | Pending                    | Pending          |
-| PTWEPIDQC                        | Implemented | Pending                    | Pending          |
-| IBAPrimusA                       | Implemented | Pending                    | Pending          |
-| StandardImagingQC3               | Implemented | Pending                    | Pending          |
-| StandardImagingQCkV              | Implemented | Pending                    | Pending          |
-| SNCkV                            | Implemented | Pending                    | Pending          |
-| SNCMV                            | Implemented | Pending                    | Pending          |
-| SNCMV12510                       | Implemented | Pending                    | Pending          |
-| LeedsTOR                         | Implemented | Pending                    | Pending          |
-| LeedsTORBlue                     | Implemented | Pending                    | Pending          |
-| DoselabMC2kV                     | Implemented | Pending                    | Pending          |
-| DoselabMC2MV                     | Implemented | Pending                    | Pending          |
-| ACRDigitalMammography            | Implemented | Pending                    | Pending          |
-| SmallACRMammography              | Implemented | Pending                    | Pending          |
-| ACRCT                            | Implemented | Pending                    | Pending          |
-| ACRMRILarge                      | Implemented | Pending                    | Pending          |
-| ACRMRIMedium                     | Implemented | Pending                    | Pending          |
-| CatPhan503                       | Pending     | Pending                    | Pending          |
-| CatPhan504                       | Pending     | Pending                    | Pending          |
-| CatPhan600                       | Pending     | Pending                    | Pending          |
-| CatPhan604                       | Pending     | Pending                    | Pending          |
-| CatPhan700                       | Pending     | Pending                    | Pending          |
-| TomoCheese                       | Pending     | Pending                    | Pending          |
-| CIRS062M                         | Pending     | Pending                    | Pending          |
-| QuartDVT                         | Pending     | Pending                    | Pending          |
-| HypersightQuartDVT               | Pending     | Pending                    | Pending          |
-| GECTQA                           | Pending     | Pending                    | Pending          |
-| GEHeliosCTDaily                  | Pending     | Pending                    | Pending          |
-| DLG                              | Pending     | Pending                    | Pending          |
-| MaxCountRate                     | Pending     | Pending                    | Pending          |
-| PlanarUniformity                 | Pending     | Pending                    | Pending          |
-| CenterOfRotation                 | Pending     | Pending                    | Pending          |
-| TomographicResolution            | Pending     | Pending                    | Pending          |
-| SimpleSensitivity                | Pending     | Pending                    | Pending          |
-| FourBarResolution                | Pending     | Pending                    | Pending          |
-| QuadrantResolution               | Pending     | Pending                    | Pending          |
-| TomographicUniformity            | Pending     | Pending                    | Pending          |
-| TomographicContrast              | Pending     | Pending                    | Pending          |
-| Dynalog                          | Pending     | Pending                    | Pending          |
-| TrajectoryLog                    | Pending     | Pending                    | Pending          |
-| MachineLogs                      | Pending     | Pending                    | Pending          |
-| TG51Photon                       | Pending     | Pending                    | Pending          |
-| TG51ElectronLegacy               | Pending     | Pending                    | Pending          |
-| TG51ElectronModern               | Pending     | Pending                    | Pending          |
-| TRS398Photon                     | Pending     | Pending                    | Pending          |
-| TRS398Electron                   | Pending     | Pending                    | Pending          |
-| QuasarLightRadScaling            | Implemented | Pending                    | Pending          |
-| JawOrthogonality                 | Pending     | Pending                    | Pending          |
+| QA analysis                      | Adapter           | Generated example                                | Human acceptance |
+| -------------------------------- | ----------------- | ------------------------------------------------ | ---------------- |
+| PicketFence                      | Implemented       | Standard and branded                             | Approved pilot   |
+| WinstonLutz2D                    | Implemented       | Standard and branded                             | Pending          |
+| WinstonLutz                      | Implemented       | Standard and branded; 17 images                  | Pending          |
+| WinstonLutzMultiTargetMultiField | Implemented       | Standard and branded                             | Pending          |
+| Starshot                         | Implemented       | Awaiting TIFF source-to-image distance           | Pending          |
+| DRGS                             | Implemented       | Standard and branded                             | Pending          |
+| DRCS                             | Implemented       | Standard and branded                             | Pending          |
+| DRMLC                            | Implemented       | Standard and branded                             | Pending          |
+| FieldAnalysis                    | Implemented       | Standard and branded from fa.dcm                 | Pending          |
+| DeviceFieldAnalysis              | Excluded by scope | Not applicable                                   | Not applicable   |
+| FieldProfileAnalysis             | Implemented       | Standard and branded                             | Pending          |
+| StandardImagingFC2               | Implemented       | Awaiting fc2.dcm or matching image               | Pending          |
+| IMTLRad                          | Implemented       | Awaiting matching image                          | Pending          |
+| DoselabRLf                       | Implemented       | Awaiting matching image                          | Pending          |
+| IsoAlign                         | Implemented       | Awaiting matching image                          | Pending          |
+| SNCFSQA                          | Implemented       | Awaiting matching image                          | Pending          |
+| LasVegas                         | Implemented       | Standard and branded from LasVegas2.dcm          | Pending          |
+| ElektaLasVegas                   | Implemented       | Standard and branded                             | Pending          |
+| PTWEPIDQC                        | Implemented       | Standard and branded; analysis warnings retained | Pending          |
+| IBAPrimusA                       | Implemented       | Blocked: input phantom detection fails           | Pending          |
+| StandardImagingQC3               | Implemented       | Standard and branded                             | Pending          |
+| StandardImagingQCkV              | Implemented       | Standard and branded                             | Pending          |
+| SNCkV                            | Implemented       | Standard and branded                             | Pending          |
+| SNCMV                            | Implemented       | Standard and branded                             | Pending          |
+| SNCMV12510                       | Implemented       | Awaiting matching image                          | Pending          |
+| LeedsTOR                         | Implemented       | Standard and branded                             | Pending          |
+| LeedsTORBlue                     | Implemented       | Awaiting matching input                          | Pending          |
+| DoselabMC2kV                     | Implemented       | Standard and branded                             | Pending          |
+| DoselabMC2MV                     | Implemented       | Standard and branded                             | Pending          |
+| ACRDigitalMammography            | Implemented       | Standard and branded; full detail views          | Pending          |
+| SmallACRMammography              | Implemented       | Standard and branded from Planar Mammo.dcm       | Pending          |
+| ACRCT                            | Implemented       | Blocked: CT archive has no detected HU module    | Pending          |
+| ACRMRILarge                      | Implemented       | Standard and branded                             | Pending          |
+| ACRMRIMedium                     | Implemented       | Awaiting matching input                          | Pending          |
+| CatPhan503                       | Implemented       | Standard and branded; analysis warnings retained | Pending          |
+| CatPhan504                       | Implemented       | Standard and branded                             | Pending          |
+| CatPhan600                       | Implemented       | Standard and branded                             | Pending          |
+| CatPhan604                       | Implemented       | Standard and branded                             | Pending          |
+| CatPhan700                       | Implemented       | Awaiting matching input                          | Pending          |
+| TomoCheese                       | Implemented       | Standard and branded                             | Pending          |
+| CIRS062M                         | Implemented       | Awaiting matching input                          | Pending          |
+| QuartDVT                         | Implemented       | Standard and branded                             | Pending          |
+| HypersightQuartDVT               | Implemented       | Awaiting matching input                          | Pending          |
+| GECTQA                           | Implemented       | Standard and branded; profile warning retained   | Pending          |
+| GEHeliosCTDaily                  | Implemented       | Standard and branded                             | Pending          |
+| DLG                              | Implemented       | Awaiting image and overlap settings              | Pending          |
+| MaxCountRate                     | Excluded by scope | Not applicable                                   | Not applicable   |
+| PlanarUniformity                 | Excluded by scope | Not applicable                                   | Not applicable   |
+| CenterOfRotation                 | Excluded by scope | Not applicable                                   | Not applicable   |
+| TomographicResolution            | Excluded by scope | Not applicable                                   | Not applicable   |
+| SimpleSensitivity                | Excluded by scope | Not applicable                                   | Not applicable   |
+| FourBarResolution                | Excluded by scope | Not applicable                                   | Not applicable   |
+| QuadrantResolution               | Excluded by scope | Not applicable                                   | Not applicable   |
+| TomographicUniformity            | Excluded by scope | Not applicable                                   | Not applicable   |
+| TomographicContrast              | Excluded by scope | Not applicable                                   | Not applicable   |
+| Dynalog                          | Excluded by scope | Not applicable                                   | Not applicable   |
+| TrajectoryLog                    | Excluded by scope | Not applicable                                   | Not applicable   |
+| MachineLogs                      | Excluded by scope | Not applicable                                   | Not applicable   |
+| TG51Photon                       | Excluded by scope | Not applicable                                   | Not applicable   |
+| TG51ElectronLegacy               | Excluded by scope | Not applicable                                   | Not applicable   |
+| TG51ElectronModern               | Excluded by scope | Not applicable                                   | Not applicable   |
+| TRS398Photon                     | Excluded by scope | Not applicable                                   | Not applicable   |
+| TRS398Electron                   | Excluded by scope | Not applicable                                   | Not applicable   |
+| QuasarLightRadScaling            | Implemented       | Awaiting matching input                          | Pending          |
+| JawOrthogonality                 | Implemented       | Standard and branded                             | Pending          |
 
 Variation requirements and known gaps are recorded in
 [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md). No new adapter is marked human-tested.
+
+## Local Example Generation
+
+- [x] Use the human-supplied local datasets only; do not download demo data.
+- [x] Generate standard and branded PDFs for every matching analysable input.
+- [x] Generate both large and small ACR mammography reports with individual ROI views.
+- [x] Generate a 17-image Winston-Lutz report and multi-target examples.
+- [x] Record every class, exact input and generation outcome in Markdown and JSON.
+- [ ] Obtain matching inputs/settings for the awaiting-input rows above.
+- [ ] Obtain an analysable ACR CT dataset/configuration and IBA Primus image/setup.
+- [ ] Complete per-variation generation and human acceptance; class routing alone
+      does not certify every possible analysis parameter combination.
+
+Outputs: `E:\dcms-20261013T142612Z-1-001\detailed-reports`.
+That folder contains `generation_status.md` and `generation_status.json` with
+per-analysis source inputs, PDF names and error stages. Regenerate through
+[scripts/generate_detailed_report_examples.py](scripts/generate_detailed_report_examples.py).
+
+No tests, builds, linters, screenshot checks or dependency installations were run
+for this rollout. The human declined content checks. Editor diagnostics and
+actual local report generation are recorded without claiming clinical validation.
+The checked content-check items below belong to the earlier Picket Fence pilot.
 
 ## Review And Handover
 
@@ -154,9 +199,12 @@ Variation requirements and known gaps are recorded in
       follow any required repository checks within the approved scope.
 - [x] Document the pilot's `detailed=True` and `branding` options in RST.
 - [x] Update the repository guide for the shared renderer and future adapters.
-- [ ] Record open issues and implementation status. Leave human acceptance unchecked.
+- [x] Record per-class implementation/generation status, exclusions and open blockers.
 
 ## Current Verification
+
+The checked content-check items in this section are historical Picket Fence pilot
+records, not checks run for the imaging rollout. The human declined new checks.
 
 - [x] Render the default clinical pilot from the existing local documentation image.
 - [x] Render a branding example with custom title, fonts, colours, header and footer.
