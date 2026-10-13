@@ -1550,6 +1550,8 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
         metadata: dict = None,
         bins: int = 10,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
     ) -> None:
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -1573,7 +1575,17 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             Number of bins to show for the histogram
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            If True, use the detailed, paginated report with complete structured
+            results and separate analysis artifacts. The default preserves the
+            existing PDF layout.
         """
+        if detailed:
+            self._publish_detailed_pdf(filename, notes, metadata, bins, logo)
+            if open_file:
+                webbrowser.open(filename)
+            return
+
         plt.ioff()
         canvas = pdf.PylinacCanvas(
             filename, page_title="Picket Fence Analysis", metadata=metadata, logo=logo
@@ -1596,6 +1608,153 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
 
         if open_file:
             webbrowser.open(filename)
+
+    def _publish_detailed_pdf(
+        self,
+        filename: str | io.BytesIO,
+        notes: str | Sequence[str] | None,
+        metadata: dict | None,
+        bins: int,
+        logo: Path | str | None,
+    ) -> None:
+        from matplotlib.figure import Figure
+
+        from .core.reporting import DetailedReport
+
+        if not self._is_analyzed:
+            raise RuntimeError("The image must be analyzed first. Use .analyze().")
+        mlc_name = next(
+            (
+                mlc.value["name"]
+                for mlc in MLC
+                if self.mlc is mlc.value["arrangement"]
+            ),
+            "Custom MLC arrangement",
+        )
+        report = DetailedReport(
+            title="Picket Fence Analysis",
+            results=self.results_data(),
+            context={
+                "Analysis class": type(self).__name__,
+                "Input artifact": Path(self.image.path).name or "In-memory image",
+                "Orientation": self.orientation.value,
+                "MLC model": mlc_name,
+                "Leaf mode": "Individual bank leaves" if self.separate_leaves else "Leaf pairs",
+                "Reference": "Delivery log" if self._log_fits is not None else "Image-fitted pickets",
+                "Gantry angle (degrees)": self.image.gantry_angle,
+                "Collimator angle (degrees)": self.image.collimator_angle,
+            },
+            metadata=metadata,
+            notes=notes,
+            logo=logo,
+        )
+        figure = Figure(figsize=(8, 8))
+        try:
+            axes = figure.subplots()
+            self.image.plot(ax=axes, show=False)
+            for index, picket in enumerate(self.pickets):
+                picket.add_guards_to_axes(axes, show_text=False, idx=index)
+            for measurement in self.mlc_meas:
+                measurement.plot2axes(axes, width=1.5)
+                measurement.plot_overlay2axes(axes, False)
+            axes.plot(
+                self.image.center.x,
+                self.image.center.y,
+                "r+",
+                ms=12,
+                markeredgewidth=3,
+            )
+            axes.axis("off")
+            with io.BytesIO() as buffer:
+                figure.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
+                artifact = buffer.getvalue()
+        finally:
+            figure.clear()
+        report.add_artifact(
+            "Analysed picket fence image",
+            artifact,
+            f"Input: {Path(self.image.path).name or 'In-memory image'}. "
+            f"Orientation: {self.orientation.value}. "
+            "The cross marks the central axis. Guard rails and leaf-position "
+            "overlays use the existing analysis measurements.",
+        )
+
+        def numeric_values(value: object, field: str) -> list[float]:
+            if not isinstance(value, list) or any(
+                not isinstance(item, (int, float)) or not np.isfinite(item)
+                for item in value
+            ):
+                raise ValueError(f"Cannot chart non-finite or invalid results in {field}.")
+            return [float(item) for item in value]
+
+        errors = report.values["mlc_errors_by_leaf"]
+        if not isinstance(errors, dict):
+            raise ValueError("Picket Fence reports require per-leaf error results.")
+        leaf_errors = {
+            str(leaf): numeric_values(values, f"mlc_errors_by_leaf[{leaf}]")
+            for leaf, values in errors.items()
+        }
+        leaf_names = [leaf for leaf, values in leaf_errors.items() if values]
+        maximum_errors = [max(abs(value) for value in leaf_errors[leaf]) for leaf in leaf_names]
+        failed = report.values["failed_leaves"]
+        failed_names = [str(leaf) for leaf in failed] if isinstance(failed, list) else []
+        tolerance = report.values["tolerance_mm"]
+        limits = [("Tolerance (mm)", float(tolerance))] if isinstance(tolerance, (int, float)) else []
+        action_tolerance = report.values["action_tolerance_mm"]
+        if isinstance(action_tolerance, (int, float)):
+            limits.append(("Action tolerance (mm)", float(action_tolerance)))
+        report.add_bar_chart(
+            "Maximum absolute error by leaf",
+            leaf_names,
+            maximum_errors,
+            "Maximum absolute error (mm)",
+            "MLC leaf identifier",
+            limits=limits,
+            highlighted=failed_names,
+            caption="Each bar is the largest absolute error in that leaf's captured "
+            "measurements. Asterisks identify failed leaves from the analysis. "
+            "The complete signed errors and positions are listed in the results appendix. "
+            "Leaves without measurements have no bar and remain in the complete results.",
+        )
+        report.add_histogram(
+            "Signed leaf-position error distribution",
+            [value for values in leaf_errors.values() for value in values],
+            bins=bins,
+            measurement_label="Error interval (mm)",
+            caption="All captured leaf-position errors are included. Negative and positive "
+            "values retain their original sign. Intervals include the left boundary; "
+            "only the final interval includes its right boundary.",
+        )
+        offsets = numeric_values(report.values["offsets_from_cax_mm"], "offsets_from_cax_mm")
+        report.add_bar_chart(
+            "Picket positions relative to the central axis",
+            [str(index) for index in range(len(offsets))],
+            offsets,
+            "Offset from CAX (mm)",
+            "Picket index (0-based)",
+            caption="Offsets use the sign convention in the analysis results. "
+            "Positive offsets are to the left; picket indices start at zero.",
+        )
+        widths = report.values["picket_widths"]
+        if not isinstance(widths, dict):
+            raise ValueError("Picket Fence reports require per-picket width results.")
+        width_names: list[str] = []
+        mean_widths: list[float] = []
+        for name, measurements in widths.items():
+            if not isinstance(measurements, dict):
+                raise ValueError(f"Invalid width results for {name}.")
+            width_names.append(str(name))
+            mean_widths.extend(numeric_values([measurements.get("mean")], f"picket_widths[{name}].mean"))
+        report.add_bar_chart(
+            "Mean picket widths",
+            width_names,
+            mean_widths,
+            "Mean picket width (mm)",
+            "Picket identifier",
+            caption="Mean widths use the captured results. Minimum, maximum and median "
+            "widths for every picket are included in the complete results.",
+        )
+        report.write(filename)
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
         results_data = self.results_data()
