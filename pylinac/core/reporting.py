@@ -6,11 +6,13 @@ import io
 import json
 import math
 import re
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+import webbrowser
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import BinaryIO
+from typing import TYPE_CHECKING, BinaryIO
 from xml.sax.saxutils import escape
 
 import numpy as np
@@ -37,6 +39,11 @@ from reportlab.platypus import (
     TableStyle,
 )
 from reportlab.platypus.tableofcontents import TableOfContents
+
+from .utilities import ResultBase
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 CONTENT_WIDTH = A4[0] - 3.6 * cm - 12
 
@@ -100,12 +107,25 @@ class ReportField:
         Display a stored zero-based integer identifier as a one-based number.
     missing_label : str
         Wording used when the measurement is null.
+    decimal_places : int, optional
+        Display precision for floating-point measurements, between 0 and 6.
+        Nested measurements inherit the nearest configured field precision.
+        Unconfigured values use two decimals. Stored results are not rounded.
     """
 
     label: str
     explanation: str = ""
     numbered: bool = False
     missing_label: str = "Not reported"
+    decimal_places: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.decimal_places is not None and (
+            isinstance(self.decimal_places, bool)
+            or not isinstance(self.decimal_places, int)
+            or self.decimal_places not in range(7)
+        ):
+            raise ValueError("Report precision must be between 0 and 6 decimal places.")
 
 
 @dataclass(frozen=True)
@@ -204,13 +224,26 @@ def _label(name: str) -> str:
     return text[:1].upper() + text[1:]
 
 
+def _number(value: float, decimal_places: int = 2) -> str:
+    if (
+        isinstance(decimal_places, bool)
+        or not isinstance(decimal_places, int)
+        or decimal_places not in range(7)
+    ):
+        raise ValueError("Report precision must be between 0 and 6 decimal places.")
+    rounded = round(value, decimal_places)
+    if rounded == 0:
+        rounded = 0.0
+    return format(rounded, f".{decimal_places}f")
+
+
 def _value(value: object) -> str:
     if value is None:
         return "Not reported"
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, float):
-        return format(value, ".8g")
+        return _number(value)
     if isinstance(value, dict):
         return (
             "; ".join(
@@ -234,6 +267,225 @@ def _leaves(
             yield from _leaves(child, path + (index,))
     else:
         yield path, value
+
+
+class _ReportSnapshot(ResultBase):
+    model_config = ConfigDict(extra="allow")
+
+
+def _snapshot_value(value: object) -> object:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, np.ndarray):
+        return _snapshot_value(value.tolist())
+    if isinstance(value, np.generic):
+        return _snapshot_value(value.item())
+    if isinstance(value, Enum):
+        return _snapshot_value(value.value)
+    if isinstance(value, Path):
+        return str(value)
+    if is_dataclass(value) and not isinstance(value, type):
+        return _snapshot_value(asdict(value))
+    if isinstance(value, Mapping):
+        return {str(key): _snapshot_value(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot_value(child) for child in value]
+    if value is None or isinstance(value, (str, int, float, bool, datetime)):
+        return value
+    raise TypeError(f"Unsupported report measurement type: {type(value).__name__}")
+
+
+def _model_report_fields(
+    value: object, path: tuple[str, ...] = ()
+) -> dict[tuple[str, ...], ReportField]:
+    fields: dict[tuple[str, ...], ReportField] = {}
+    if isinstance(value, BaseModel):
+        for key, definition in type(value).model_fields.items():
+            if key in {"pylinac_version", "date_of_analysis", "warnings", "passed"}:
+                continue
+            location = path + (key,)
+            label = _label(definition.title or key)
+            fields[location] = ReportField(label)
+            fields.update(_model_report_fields(getattr(value, key), location))
+    elif isinstance(value, Mapping):
+        for key, child in value.items():
+            fields.update(_model_report_fields(child, path + (str(key),)))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            fields.update(_model_report_fields(child, path + ("*",)))
+    return fields
+
+
+def publish_analysis_report(
+    results: BaseModel | Mapping[str, object],
+    filename: str | Path | BinaryIO,
+    *,
+    title: str,
+    context: Mapping[str, object] | None = None,
+    notes: str | Sequence[str] | None = None,
+    metadata: Mapping[str, object] | None = None,
+    logo: Path | str | None = None,
+    branding: ReportBranding | Mapping[str, object] | None = None,
+    fields: Mapping[tuple[str, ...], ReportField] | None = None,
+    table_labels: Mapping[str, ReportTableLabels] | None = None,
+    plots: Mapping[str, Callable[[], object]] | None = None,
+    artifact_streams: Callable[[], Iterable[tuple[str, BinaryIO]]] | None = None,
+    chart_fields: Sequence[str] = (),
+    open_file: bool = False,
+) -> None:
+    """Publish complete results with module-supplied analysis artifacts.
+
+    Parameters
+    ----------
+    results : BaseModel or mapping
+        Existing results captured once by the analysis adapter. Mappings are
+        supported for analyses without a structured result model.
+    filename : str, Path or binary stream
+        Destination. Caller-owned streams remain open.
+    title : str
+        Clinical analysis name.
+    context, metadata : mapping, optional
+        Input identifiers, analysis settings and supplied review information.
+    notes : str or sequence of str, optional
+        Review notes.
+    logo : str or Path, optional
+        Local logo.
+    branding : ReportBranding or mapping, optional
+        Complete visual identity.
+    fields, table_labels : mapping, optional
+        Module-specific clinical names, units, precision and table identifiers.
+    plots : mapping, optional
+        Named callbacks to existing plotting methods with display disabled.
+        Only report-owned figures are exported and closed. Split plots retain
+        the names returned by the analysis.
+    artifact_streams : callable, optional
+        Yield named, report-owned image streams. Each is read and closed before
+        requesting the next artifact, for large or incremental exports.
+    chart_fields : sequence of str
+        Scalar result fields requiring their own measurement visual. Units are
+        taken from the supplied field labels, never inferred from the values.
+    open_file : bool
+        Open file destinations after publishing; does not apply to streams.
+    """
+    model = results if isinstance(results, BaseModel) else _ReportSnapshot.model_validate(
+        _snapshot_value(results)
+    )
+    presentation = _model_report_fields(model)
+    if not isinstance(results, BaseModel):
+        presentation[("date_of_analysis",)] = ReportField("Report snapshot date")
+    presentation.update(fields or {})
+    report = DetailedReport(
+        title=title, results=model, context=context, notes=notes, metadata=metadata,
+        logo=logo, branding=branding, fields=presentation, table_labels=table_labels,
+    )
+    for key in chart_fields:
+        value = report.values.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
+            label = report._field_title(key)
+            report.add_bar_chart(
+                label, [label], [float(value)], label, "Measurement",
+                caption="Recorded measurement. No acceptance tolerance is inferred.",
+            )
+    for name, plot in (plots or {}).items():
+        report.add_plot_artifacts(name, plot)
+    if artifact_streams is not None:
+        for name, stream in artifact_streams():
+            try:
+                stream.seek(0)
+                report.add_artifact(name, stream.read(), f"{name}. Existing analysis overlays and measurement scales are retained.")
+            finally:
+                stream.close()
+    report.write(filename)
+    if open_file and isinstance(filename, (str, Path)):
+        webbrowser.open(str(filename))
+
+
+def publish_calibration_report(
+    analysis: object,
+    filename: str | Path | BinaryIO,
+    *,
+    title: str,
+    notes: str | Sequence[str] | None = None,
+    metadata: Mapping[str, object] | None = None,
+    logo: Path | str | None = None,
+    branding: Mapping[str, object] | None = None,
+    open_file: bool = False,
+) -> None:
+    """Snapshot calibration inputs and existing calculated dose properties.
+
+    Parameters
+    ----------
+    analysis : object
+        An existing TG-51 or TRS-398 calibration instance.
+    filename : str, Path or binary stream
+        Report destination.
+    title : str
+        Calibration protocol and beam variation.
+    notes : str or sequence of str, optional
+        Review notes.
+    metadata : mapping, optional
+        Site and review information.
+    logo : str or Path, optional
+        Local logo.
+    branding : mapping, optional
+        Complete visual identity.
+    open_file : bool
+        Open file destinations after publishing.
+    """
+    snapshot = {name: value for name, value in vars(analysis).items() if not name.startswith("_")}
+    adjusted = bool(getattr(analysis, "output_was_adjusted"))
+    computed = (
+        "p_tp", "p_ion", "p_pol", "k_tp", "k_pol", "k_s", "m_corrected",
+        "pddx", "kq", "r_50", "dref", "zref", "pq_gr", "output_was_adjusted",
+        "dose_mu_10", "dose_mu_dref", "dose_mu_dmax", "dose_mu_zref", "dose_mu_zmax",
+        "m_corrected_adjustment", "m_corrected_adjusted", "dose_mu_10_adjusted",
+        "dose_mu_dref_adjusted", "dose_mu_dmax_adjusted", "dose_mu_zref_adjusted", "dose_mu_zmax_adjusted",
+    )
+    for name in computed:
+        if any(name in parent.__dict__ for parent in type(analysis).__mro__):
+            snapshot[name] = None if not adjusted and (name.endswith("_adjusted") or name == "m_corrected_adjustment") else getattr(analysis, name)
+    labels = {
+        "institution": "Institution", "physicist": "Physicist", "unit": "Treatment unit",
+        "measurement_date": "Measurement date", "temp": "Temperature (degrees Celsius)",
+        "press": "Pressure (kPa)", "chamber": "Ionisation chamber and calibration coefficients",
+        "n_dw": "Absorbed-dose calibration factor (as supplied)", "electrometer": "Electrometer",
+        "energy": "Nominal beam energy (MeV)" if "Electron" in type(analysis).__name__ else "Nominal beam energy (MV)",
+        "voltage_reference": "Reference voltage (V)", "voltage_reduced": "Reduced voltage (V)",
+        "m_reference": "Reference-voltage chamber readings (nC)",
+        "m_opposite": "Opposite-polarity chamber readings (nC)",
+        "m_reduced": "Reduced-voltage chamber readings (nC)",
+        "m_gradient": "Gradient chamber readings (nC)",
+        "m_reference_adjusted": "Adjusted reference-voltage chamber readings (nC)",
+        "mu": "Delivered monitor units", "tissue_correction": "Tissue correction factor",
+        "m_corrected": "Corrected chamber reading (nC)",
+        "m_corrected_adjustment": "Adjusted corrected chamber reading (nC)",
+        "m_corrected_adjusted": "Adjusted corrected chamber reading (nC)",
+        "p_tp": "Temperature and pressure correction factor", "k_tp": "Temperature and pressure correction factor",
+        "p_ion": "Ion collection correction factor", "k_s": "Ion collection correction factor",
+        "p_pol": "Polarity correction factor", "k_pol": "Polarity correction factor",
+        "p_elec": "Electrometer correction factor", "k_elec": "Electrometer correction factor",
+        "kq": "Beam-quality correction factor", "k_ecal": "Electron calibration correction factor",
+        "pq_gr": "Gradient correction factor", "r_50": "Depth of 50% dose (cm)",
+        "i_50": "Depth of 50% ionisation (cm)", "dref": "Reference depth (cm)", "zref": "Reference depth (cm)",
+        "pddx": "Photon-only depth dose at 10 cm (%)", "measured_pdd10": "Measured depth dose at 10 cm (%)",
+        "clinical_pdd10": "Clinical depth dose at 10 cm (%)", "clinical_pdd": "Clinical depth dose (%)",
+        "clinical_pdd_zref": "Clinical depth dose at reference depth (%)",
+        "clinical_tmr_zref": "Clinical tissue-maximum ratio at reference depth",
+        "tpr2010": "Tissue-phantom ratio at 20 cm to 10 cm", "fff": "Flattening-filter-free beam",
+        "cone": "Electron applicator", "lead_foil": "Lead-foil arrangement", "setup": "Calibration setup",
+        "output_was_adjusted": "Output was adjusted",
+    }
+    for key in snapshot:
+        if key.startswith("dose_mu_"):
+            depth = {"10": "10 cm", "dref": "reference depth", "dmax": "dose-maximum depth", "zref": "reference depth", "zmax": "dose-maximum depth"}.get(key.removeprefix("dose_mu_").removesuffix("_adjusted"), "recorded depth")
+            labels[key] = f"{'Adjusted dose' if key.endswith('_adjusted') else 'Dose'} per monitor unit at {depth} (cGy/MU)"
+    publish_analysis_report(
+        snapshot, filename, title=title, notes=notes, metadata=metadata,
+        logo=logo, branding=branding,
+        fields={(key,): ReportField(label, decimal_places=3) for key, label in labels.items()},
+        chart_fields=tuple(key for key in snapshot if key.startswith("dose_mu_")),
+        open_file=open_file,
+    )
 
 
 class DetailedReport:
@@ -430,19 +682,41 @@ class DetailedReport:
         field = self._fields.get(key)
         return _label((field.title if field is not None else None) or key)
 
-    def _field_presentation(self, path: tuple[str | int, ...]) -> ReportField | None:
+    def _matched_field(
+        self, path: tuple[str | int, ...]
+    ) -> tuple[tuple[str, ...], ReportField] | None:
         exact = tuple(str(part) for part in path)
         presentation = self._presentation.get(exact)
-        if presentation is not None or len(path) < 2:
-            return presentation
-        wildcard = (str(path[0]),) + ("*",) * (len(path) - 2) + (str(path[-1]),)
-        return self._presentation.get(wildcard)
+        if presentation is not None:
+            return exact, presentation
+        matches = [
+            (sum(part != "*" for part in pattern), pattern, wording)
+            for pattern, wording in self._presentation.items()
+            if len(pattern) == len(exact)
+            and all(part == "*" or part == actual for part, actual in zip(pattern, exact))
+        ]
+        if not matches:
+            return None
+        _, pattern, wording = max(matches, key=lambda match: match[0])
+        return pattern, wording
+
+    def _field_presentation(self, path: tuple[str | int, ...]) -> ReportField | None:
+        match = self._matched_field(path)
+        return match[1] if match is not None else None
 
     def _measurement_label(self, path: tuple[str | int, ...]) -> str:
-        presentation = self._field_presentation(path)
-        if presentation is not None:
-            return presentation.label
         labels = self._table_labels.get(str(path[0]), ReportTableLabels())
+        match = self._matched_field(path)
+        if match is not None:
+            pattern, presentation = match
+            identifiers = [
+                f"{labels.series_heading} {actual + 1}"
+                if isinstance(actual, int)
+                else labels.row_labels.get(actual, actual)
+                for part, actual in zip(pattern, path)
+                if part == "*"
+            ]
+            return ": ".join([*identifiers, presentation.label])
         parts = path[1:] or path
         return ": ".join(
             f"{labels.series_heading} {part + 1}"
@@ -477,6 +751,11 @@ class DetailedReport:
                 )
             except ValueError:
                 pass
+        if isinstance(value, float):
+            for length in range(len(path), 0, -1):
+                parent = self._field_presentation(path[:length])
+                if parent is not None and parent.decimal_places is not None:
+                    return _number(value, parent.decimal_places)
         return _value(value)
 
     def _table(
@@ -561,6 +840,85 @@ class DetailedReport:
             ]
         )
 
+    def add_matplotlib_artifact(
+        self,
+        title: str,
+        plot: Callable[[Axes], object],
+        caption: str,
+        figsize: tuple[float, float] = (8, 8),
+    ) -> None:
+        """Render an existing analysis plot on an isolated, report-owned figure.
+
+        Parameters
+        ----------
+        title : str
+            Artifact heading.
+        plot : callable
+            Draw the existing analysis onto the supplied axes without showing it.
+        caption : str
+            Input identity, units and explanation of the existing overlays.
+        figsize : tuple of float
+            Figure dimensions in inches.
+        """
+        from matplotlib.figure import Figure
+
+        figure = Figure(figsize=figsize)
+        try:
+            plot(figure.subplots())
+            with io.BytesIO() as buffer:
+                figure.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
+                self.add_artifact(title, buffer.getvalue(), caption)
+        finally:
+            figure.clear()
+
+    def add_plot_artifacts(self, title: str, plot: Callable[[], object]) -> None:
+        """Capture existing plotting exports without affecting caller-owned figures.
+
+        Parameters
+        ----------
+        title : str
+            Artifact heading when the analysis does not return plot names.
+        plot : callable
+            Existing plotting method with display disabled. Every new figure
+            is exported separately, retaining its analysis overlays.
+        """
+        from matplotlib import pyplot as plt
+
+        previous = set(plt.get_fignums())
+        current = plt.gcf().number if previous else None
+        interactive = plt.isinteractive()
+        plt.figure(figsize=(8, 8))
+        try:
+            result = plot()
+            names: dict[int, str] = {}
+            if isinstance(result, Mapping):
+                names = {figure.number: str(name) for name, figure in result.items() if hasattr(figure, "number")}
+            elif isinstance(result, tuple) and len(result) == 2:
+                figures, labels = result
+                if isinstance(figures, list) and isinstance(labels, list) and all(isinstance(label, str) for label in labels):
+                    names = {figure.number: label for figure, label in zip(figures, labels)}
+            count = 0
+            for number in sorted(set(plt.get_fignums()) - previous):
+                figure = plt.figure(number)
+                if not figure.axes or not any(axes.has_data() for axes in figure.axes):
+                    continue
+                count += 1
+                name = names.get(number) or (title if count == 1 else f"{title}: view {count}")
+                with io.BytesIO() as buffer:
+                    figure.savefig(buffer, format="png", dpi=220, bbox_inches="tight")
+                    self.add_artifact(name, buffer.getvalue(), f"{name}. Existing analysis overlays and measurement scales are retained.")
+            if not count:
+                raise RuntimeError(f"The analysis did not produce an artifact for '{title}'.")
+        finally:
+            for number in set(plt.get_fignums()) - previous:
+                plt.close(number)
+            if interactive:
+                plt.ion()
+            else:
+                plt.ioff()
+            if current is not None and current in plt.get_fignums():
+                plt.figure(current)
+
     def add_bar_chart(
         self,
         title: str,
@@ -573,6 +931,7 @@ class DetailedReport:
         highlighted: Sequence[str] = (),
         caption: str = "",
         whole_values: bool = False,
+        decimal_places: int = 2,
     ) -> None:
         """Add paged vector charts with labelled axes and supplied tolerance lines.
 
@@ -594,6 +953,9 @@ class DetailedReport:
             Measurement context displayed below the chart.
         whole_values : bool
             Use integer ticks for counts.
+        decimal_places : int
+            Display precision for axis labels and limits; measurements keep
+            their original precision.
         """
         if len(categories) != len(values) or not values:
             raise ValueError(f"Chart '{title}' needs matching, nonempty measurements.")
@@ -629,7 +991,9 @@ class DetailedReport:
             chart.valueAxis.labels.fillColor = self._ink
             chart.valueAxis.labels.fontName = self.branding.body_font
             chart.valueAxis.labels.fontSize = self.branding.font_size - 1
-            chart.valueAxis.labelTextFormat = "%d" if whole_values else "%.3g"
+            chart.valueAxis.labelTextFormat = lambda value: _number(
+                value, 0 if whole_values else decimal_places
+            )
             if whole_values:
                 chart.valueAxis.valueStep = max(1, math.ceil((maximum - minimum) / 5))
             chart.categoryAxis.categoryNames = [
@@ -714,7 +1078,7 @@ class DetailedReport:
                     String(
                         22,
                         legend_y,
-                        f"{name}: {_value(limit)}",
+                        f"{name}: {_number(limit, decimal_places)}",
                         fontName=self.branding.body_font,
                         fontSize=self.branding.font_size - 1,
                         fillColor=self._ink,
@@ -738,13 +1102,20 @@ class DetailedReport:
         bins: int,
         measurement_label: str,
         caption: str = "",
+        *,
+        decimal_places: int = 2,
     ) -> None:
         """Add a vector histogram using NumPy's standard bin calculation."""
         if not values or any(not math.isfinite(value) for value in values):
             raise ValueError(f"Histogram '{title}' needs finite measurements.")
         counts, edges = np.histogram(values, bins=bins)
+        while decimal_places < 6 and np.any(
+            np.diff(np.round(edges, decimals=decimal_places)) == 0
+        ):
+            decimal_places += 1
         categories = [
-            f"{left:.3g} to {right:.3g}" for left, right in zip(edges[:-1], edges[1:])
+            f"{_number(float(left), decimal_places)} to {_number(float(right), decimal_places)}"
+            for left, right in zip(edges[:-1], edges[1:])
         ]
         self.add_bar_chart(
             title,
@@ -763,7 +1134,7 @@ class DetailedReport:
             if passed is True
             else "Outside tolerance"
             if passed is False
-            else "Not assessed"
+            else "Not evaluated"
         )
         story: list[Flowable] = [
             self._paragraph(self.title, "Title"),
@@ -771,11 +1142,14 @@ class DetailedReport:
             self._paragraph(f"Test outcome: {status}", "Heading2"),
         ]
         identity = {
-            "Date of analysis": self._measurement_value(
+            self._field_title("date_of_analysis"): self._measurement_value(
                 self.values.get("date_of_analysis"), ("date_of_analysis",)
             ),
             "Analysis software version": self.values.get("pylinac_version"),
-            **self._context,
+            **{
+                key: self._measurement_value(value, (key,))
+                for key, value in self._context.items()
+            },
         }
         story.append(
             self._table(
@@ -929,6 +1303,24 @@ class DetailedReport:
                         )
                         tables.append(Spacer(1, 8))
                     return tables
+        if isinstance(value, dict) and any(isinstance(child, (dict, list)) for child in value.values()):
+            tables = []
+            scalar_values = {key: child for key, child in value.items() if not isinstance(child, (dict, list))}
+            if scalar_values:
+                tables.extend(self._result_tables(scalar_values, path))
+            for key, child in value.items():
+                if isinstance(child, (dict, list)):
+                    location = path + (str(key),)
+                    tables.append(self._paragraph(self._measurement_label(location), "Heading2"))
+                    tables.extend(self._result_tables(child, location))
+            return tables
+        if isinstance(value, list) and any(isinstance(child, (dict, list)) for child in value):
+            tables = []
+            for index, child in enumerate(value):
+                location = path + (index,)
+                tables.append(self._paragraph(self._measurement_label(location), "Heading2"))
+                tables.extend(self._result_tables(child, location))
+            return tables
         return [
             self._table(
                 (labels.row_heading, labels.value_heading),
@@ -949,7 +1341,8 @@ class DetailedReport:
         story.append(
             self._paragraph(
                 "All recorded measurements are listed below. Numbers are rounded for "
-                "readability; the attached measurement data retain full precision.",
+                "readability; tolerance decisions use the unrounded measurements. "
+                "The attached measurement data retain full precision.",
                 "ReportCaption",
             )
         )
