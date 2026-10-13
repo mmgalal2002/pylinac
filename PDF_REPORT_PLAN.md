@@ -2,13 +2,22 @@
 
 ## Goal
 
-Add a complete, clear PDF report for every supported QA test and its variations.
+Add a complete, clear PDF report for every supported **X-ray imaging, MRI, CT
+and mammography** QA test and its variations, as narrowed by the human on
+2026-10-13. Nuclear medicine, calibration, machine logs and non-image device
+workflows are explicitly excluded from this rollout, not silently omitted.
 Show all structured results as readable report sections, with useful charts and
 the analysis artifacts. Keep the current PDF option unchanged.
 
 The Picket Fence pilot is implemented, human-tested and human-approved as confirmed
 on 2026-10-13. The human authorized the full rollout. No new PDF dependency has
 been installed. Other reports and additional variations still require review.
+
+Current delivery: 47 imaging adapters; standard and branded PDF examples for 31
+analyses (62 PDFs). Fourteen analyses await inputs/settings and two supplied
+datasets fail detection before report generation. See the individual rows in
+[AGENT_TASKS.md](AGENT_TASKS.md) for exact progress; do not call coverage accepted
+while these gaps and human reviews remain open.
 
 ## Required Audience And Branding
 
@@ -163,24 +172,100 @@ Current anchors: [pylinac/core/pdf.py](pylinac/core/pdf.py),
 Here, "test" means a QA analysis, not a pytest execution report. This is the starting
 coverage list, not a claim that every class already has JSON or PDF support.
 
-| Test family         | Required coverage                                                     |
-| ------------------- | --------------------------------------------------------------------- |
-| Picket Fence        | MLC types, leaves, pickets, orientations and tolerances               |
-| Winston-Lutz        | 2D, multi-image, multi-target/multi-field and available axis variants |
-| Starshot            | Image variants, detected lines, centre and circle results             |
-| VMAT                | DRGS, DRCS, DRMLC and their image and segment variants                |
-| Planar imaging      | Every phantom class, inherited variation and ROI result               |
-| CT and CBCT         | All CatPhan models and available module results                       |
-| ACR                 | CT and all supported MRI analysis variants                            |
-| Cheese phantoms     | TomoCheese, CIRS062M and their ROI results                            |
-| Quart               | QuartDVT, HypersightQuartDVT and available module results             |
-| Field analysis      | Image/device analysis, field profiles, protocols and metrics          |
-| GE CT QA and Helios | Every supported analysis class and result section                     |
-| DLG                 | Every supported analysis variation and result section                 |
-| Nuclear medicine    | Every supported analysis class and result section                     |
-| Machine logs        | Dynalog, trajectory logs and supported collection workflows           |
-| Calibration         | TG-51, TRS-398 and supported beam/setup variants                      |
-| Community modules   | Quasar, orthogonality and any other supported analysis                |
+| Test family | Required imaging coverage |
+| --- | --- |
+| Picket Fence | MLC types, separate/pair leaves, orientations and tolerances |
+| Winston-Lutz | 2D, multi-image, multi-target/multi-field and available axes |
+| Starshot | Image/combined-image inputs, reference point, detected lines and circle |
+| VMAT | DRGS, DRCS, DRMLC; both input images and every segment |
+| Planar imaging | Every concrete phantom class, inherited variation and ROI result |
+| CT and CBCT | All CatPhan models and available module results |
+| ACR | CT, MRI Large and MRI Medium; all module and localizer results |
+| Cheese phantoms | TomoCheese, CIRS062M and their ROI results |
+| Quart | QuartDVT, HypersightQuartDVT and their module results |
+| Field analysis | Image-based field/profile analysis, protocols and custom metrics |
+| GE CT QA and Helios | Every configured result section and available module artifact |
+| DLG | Image-derived leaf overlap measurements and recorded fit |
+| Community imaging modules | Quasar scaling and jaw orthogonality |
+| Nuclear, calibration, machine logs, field devices | Excluded by the human on 2026-10-13 |
+
+## Class And Variation Matrix
+
+All result-model fields are rendered recursively and retained in the exact JSON
+attachment. Future unlabelled fields use readable generic labels rather than
+being omitted. Clinical review remains necessary for the new adapters.
+The authoritative per-class implementation, generation and acceptance status is
+the table in [AGENT_TASKS.md](AGENT_TASKS.md). Each class below has its own row
+there, including inherited report methods; exclusions also have explicit rows.
+
+| Analysis class | Snapshot/field coverage | Required variations | Analysis artifacts/visuals |
+| --- | --- | --- | --- |
+| PicketFence | PFResult, including every leaf position/error, width and CAX | Every built-in/custom MLC, pair/separate leaves, both orientations, action tolerance, log/BB reference | Analysed image, leaf-error chart, histogram, picket offsets and widths |
+| WinstonLutz2D | WinstonLutz2DResult, all vectors and image coordinates | Single image, field/BB detection options and machine scale | Full image, BB detail, measured distance visual |
+| WinstonLutz | WinstonLutzResult and both per-image collections | Gantry/collimator/couch/combinations, TIFF/CBCT, virtual shift, duplicate angle sets | Every full image and BB detail, per-image distance chart |
+| WinstonLutzMultiTargetMultiField | Complete combined and per-image results, BB arrangements and shift | Multiple BBs/fields, missing matches, couch yaw and machine scale | Every full image and BB detail, per-BB/per-image distances |
+| Starshot | StarshotResults including line angles, circle and optional reference | Single/combined images, TIFF/DICOM, reference point, tolerance | Full image and fitted-circle detail |
+| DRGS | VMATResult and every named/indexed segment | ROI selection, tolerances and image order | Open/delivery images and median profiles separately |
+| DRCS | DRCSResult, segments, collimator angles and rotation offset | ROI angles, collimator deviations and tolerance | Open/delivery images and median profiles separately |
+| DRMLC | VMATResult and every named/indexed segment | ROI selection, tolerances and image order | Open/delivery images and median profiles separately |
+| FieldAnalysis | FieldResult; no excluded measurement fields | Image centering, edge methods, normalisation and protocols | Separate image and horizontal/vertical profiles |
+| FieldProfileAnalysis | FieldProfileResult, all metrics and every profile sample | Built-in/custom metrics, edge methods, normalisation and centering | Image with sampling regions and both measured profiles |
+| StandardImagingFC2 | LightRadResult | Field/BB setup, offsets and configured criteria | Field image and detected measurements |
+| IMTLRad | LightRadResult | Phantom-specific BB/field geometry | Field image and detected measurements |
+| DoselabRLf | LightRadResult | Phantom-specific BB/field geometry | Field image and detected measurements |
+| IsoAlign | LightRadResult | Phantom-specific BB/field geometry | Field image and detected measurements |
+| SNCFSQA | LightRadResult | Phantom-specific BB/field geometry | Field image and detected measurements |
+| LasVegas | PlanarResult including every low-contrast ROI | Contrast thresholds, setup and positioning | Image, contrast and visibility plots |
+| ElektaLasVegas | PlanarResult including every low-contrast ROI | Elekta geometry and criteria | Image, contrast and visibility plots |
+| PTWEPIDQC | PlanarResult, MTF and uniformity | Phantom-specific ROIs, unavailable MTF points and warnings | Image and available MTF/contrast plots |
+| IBAPrimusA | PlanarResult and every ROI | Phantom positioning, SSD and thresholds | Image and available MTF/contrast plots |
+| StandardImagingQC3 | PlanarResult and every ROI | Phantom geometry and thresholds | Image and available MTF/contrast plots |
+| StandardImagingQCkV | PlanarResult and every ROI | kV geometry and thresholds | Image and available MTF/contrast plots |
+| SNCkV | PlanarResult and every ROI | kV geometry and thresholds | Image and available MTF/contrast plots |
+| SNCMV | PlanarResult and every ROI | MV geometry and thresholds | Image and available MTF/contrast plots |
+| SNCMV12510 | PlanarResult and every ROI | Model-specific geometry and thresholds | Image and available MTF/contrast plots |
+| LeedsTOR | PlanarResult and every ROI | Rotation, contrast criteria and unavailable MTF points | Image and available MTF/contrast plots |
+| LeedsTORBlue | PlanarResult and every ROI | Blue phantom geometry and thresholds | Image and available MTF/contrast plots |
+| DoselabMC2kV | PlanarResult and every ROI | kV geometry and thresholds | Image and available MTF/contrast plots |
+| DoselabMC2MV | PlanarResult and every ROI | MV geometry and thresholds | Image and available MTF/contrast plots |
+| ACRDigitalMammography | ACRDigitalMammographyResult including masses, fibres, specks and detection data | Orientation, thresholds, ROI modes and mammography geometry | Full image, all measurement curves and individual ROI zooms |
+| SmallACRMammography | ACRDigitalMammographyResult; same complete fields | Small/square geometry and supported ROI detection modes | Full image, all measurement curves and individual ROI zooms |
+| CatPhan503 | CatphanResult and every available nested module | HU/geometry/thickness, resolution and uniformity | Every available module image, curve and side view |
+| CatPhan504 | CatphanResult and every available nested module | HU/geometry/thickness, resolution, uniformity and low contrast | Every available module image, curve and side view |
+| CatPhan600 | CatphanResult and every available nested module | Model-specific modules and criteria | Every available module image, curve and side view |
+| CatPhan604 | CatphanResult and every available nested module | Model-specific modules, HU reference and criteria | Every available module image, curve and side view |
+| CatPhan700 | CatphanResult and every available nested module | Model-specific modules and criteria | Every available module image, curve and side view |
+| ACRCT | ACRCTResult and all nested modules | CT number, geometry, low contrast, uniformity and resolution | Separate module images and available curves |
+| ACRMRILarge | ACRMRIResult and all nested modules | Slice 1/11, uniformity/ghosting, localizer, geometric distortion and low-contrast slices | Separate module images, localizer and measured profiles |
+| ACRMRIMedium | ACRMRIResult and all nested modules | Medium phantom geometry and supported MRI modules | Separate module images, localizer and measured profiles |
+| TomoCheese | TomoCheeseResult including complete ROI values | ROI setup and optional supplied densities | Analysed image and density curve when configured |
+| CIRS062M | CheeseResult including complete ROI values | ROI setup and optional supplied densities | Analysed image and density curve when configured |
+| QuartDVT | QuartDVTResult and all nested modules | HU, uniformity, geometry and criteria | Separate module images and scan overview |
+| HypersightQuartDVT | QuartDVTResult and all nested modules | Hypersight phantom-specific modules and criteria | Separate module images and scan overview |
+| GECTQA | GECTQAResult, configured tests, localization and compatibility results | Scanner/phantom profiles, reference values and optional modules | Separate module images and available MTF visual |
+| GEHeliosCTDaily | GEHeliosResult including every ROI and low-contrast slice | Contrast scale, resolution, low contrast, noise and uniformity | Separate module images, all available curves and scan overview |
+| DLG | Measured gap, planned/measured per-leaf arrays and full regression result | Actual planned overlaps, MLC geometry and sampling settings | Leaf-gap scatter/fit and input image |
+| QuasarLightRadScaling | Complete inherited LightRadResult | Quasar scaling and field/BB geometry | Field image and detected measurements |
+| JawOrthogonality | Four recorded corner angles and every detected edge | Image edges and square-field setup | Analysed image with detected jaw edges |
+
+Generation uses local inputs only. Missing variants remain awaiting input instead
+of being generated from the wrong phantom. IBA Primus and ACR CT currently fail
+input detection before PDF generation. Starshot needs the measured SID for the
+supplied TIFF. No scientific analysis algorithm was changed to bypass these gaps.
+
+Core image/profile/ROI/geometry/metric utilities and plan generators are supporting
+tools, not independent image QA result workflows. Their outputs are represented
+through the owning analyses above; this rollout does not create pytest reports
+or PDF reports for helper functions, data models or plan-construction classes.
+
+### Remaining Variation Review
+
+- [ ] Review every variation column above with approved matching data.
+- [ ] Generate missing inputs through the local manifest; record each variation
+      and its exact analysis settings in the example-generation output.
+- [ ] Confirm streams, notes, custom logos/brands and unchanged legacy layouts.
+- [ ] Review all displayed labels, units, warnings, tables, chart scales and artifacts.
+- [ ] Run content, documentation and regression checks when authorized by the human.
 
 - [ ] Audit public analysis classes, subclasses and inherited PDF methods. Use
       existing basic and data-bank cases to identify file and parameter variations.
@@ -188,7 +273,7 @@ coverage list, not a claim that every class already has JSON or PDF support.
       PDF support for each item, with a clear plan for any gap.
 - [ ] Check plan-generation and core utilities too. Record whether they expose QA
       results that need reports; do not count helper functions as QA tests.
-- [ ] Maintain a coverage matrix with each class/variation, result fields, artifacts,
+- [x] Maintain a coverage matrix with each class/variation, result fields, artifacts,
       charts, example inputs and review status. No silent exclusions.
 
 ## Delivery And Acceptance
