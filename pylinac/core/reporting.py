@@ -15,7 +15,8 @@ from xml.sax.saxutils import escape
 
 import numpy as np
 from PIL import Image as PILImage
-from pydantic import BaseModel, ConfigDict, Field as ModelField
+from pydantic import BaseModel, ConfigDict
+from pydantic import Field as ModelField
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.shapes import Drawing, Line, String
 from reportlab.lib import colors
@@ -167,7 +168,9 @@ def _attach_json(canvas: Canvas, content: bytes) -> None:
             "Type": pdfdoc.PDFName("Filespec"),
             "F": pdfdoc.PDFString("results.json"),
             "UF": pdfdoc.PDFString("results.json"),
-            "Desc": pdfdoc.PDFString("The complete results snapshot used in this report"),
+            "Desc": pdfdoc.PDFString(
+                "The complete results snapshot used in this report"
+            ),
             "EF": pdfdoc.PDFDictionary({"F": stream_reference, "UF": stream_reference}),
         }
     )
@@ -209,7 +212,12 @@ def _value(value: object) -> str:
     if isinstance(value, float):
         return format(value, ".8g")
     if isinstance(value, dict):
-        return "; ".join(f"{_label(str(key))}: {_value(child)}" for key, child in value.items()) or "No recorded items"
+        return (
+            "; ".join(
+                f"{_label(str(key))}: {_value(child)}" for key, child in value.items()
+            )
+            or "No recorded items"
+        )
     if isinstance(value, list):
         return "; ".join(_value(child) for child in value) or "No recorded items"
     return str(value)
@@ -267,7 +275,11 @@ class DetailedReport:
         table_labels: Mapping[str, ReportTableLabels] | None = None,
         branding: ReportBranding | Mapping[str, object] | None = None,
     ) -> None:
-        self.branding = branding if isinstance(branding, ReportBranding) else ReportBranding.model_validate(branding or {})
+        self.branding = (
+            branding
+            if isinstance(branding, ReportBranding)
+            else ReportBranding.model_validate(branding or {})
+        )
         self.title = self.branding.report_title or title
         self._primary = colors.toColor(self.branding.primary_color)
         self._ink = colors.toColor(self.branding.text_color)
@@ -276,14 +288,18 @@ class DetailedReport:
         self._row_background = colors.toColor(self.branding.table_background_color)
         self._header_ink = colors.toColor(self.branding.table_header_text_color)
         self._line = colors.toColor(self.branding.border_color)
-        self._chart = colors.toColor(self.branding.chart_color or self.branding.primary_color)
+        self._chart = colors.toColor(
+            self.branding.chart_color or self.branding.primary_color
+        )
         self._failure = colors.toColor(self.branding.failure_color)
         self._warning = colors.toColor(self.branding.warning_color)
         for font in (self.branding.body_font, self.branding.heading_font):
             try:
                 getFont(font)
             except KeyError as error:
-                raise ValueError(f"Register the report font '{font}' before publishing.") from error
+                raise ValueError(
+                    f"Register the report font '{font}' before publishing."
+                ) from error
         self.results_json = results.model_dump_json()
         values = json.loads(self.results_json)
         if not isinstance(values, dict):
@@ -376,7 +392,9 @@ class DetailedReport:
             if packaged.is_file():
                 self._logo = packaged
         self._page_header = self._paragraph(
-            "\n".join(text for text in (self.branding.name, self.branding.header_text) if text),
+            "\n".join(
+                text for text in (self.branding.name, self.branding.header_text) if text
+            ),
             "ReportPageHeader",
         )
         self._header_x = 6.0 * cm if self._logo is not None else 1.8 * cm
@@ -390,12 +408,12 @@ class DetailedReport:
         _, self._footer_height = self._page_footer.wrap(CONTENT_WIDTH - 65, A4[1])
         self._bottom_margin = max(2.0 * cm, self._footer_height + 1.5 * cm)
         if self._top_margin + self._bottom_margin > A4[1] - 8 * cm:
-            raise ValueError("The report header and footer leave too little space for measurements.")
+            raise ValueError(
+                "The report header and footer leave too little space for measurements."
+            )
 
     def _paragraph(self, text: object, style: str = "BodyText") -> Paragraph:
-        return Paragraph(
-            escape(str(text)).replace("\n", "<br/>"), self._styles[style]
-        )
+        return Paragraph(escape(str(text)).replace("\n", "<br/>"), self._styles[style])
 
     def _section(self, title: str, level: int = 0) -> list[Flowable]:
         key = f"section-{self._section_id}"
@@ -436,7 +454,11 @@ class DetailedReport:
     def _measurement_value(self, value: object, path: tuple[str | int, ...]) -> str:
         presentation = self._field_presentation(path)
         if value is None:
-            return presentation.missing_label if presentation is not None else "Not reported"
+            return (
+                presentation.missing_label
+                if presentation is not None
+                else "Not reported"
+            )
         if (
             presentation is not None
             and presentation.numbered
@@ -448,7 +470,11 @@ class DetailedReport:
             return "Within tolerance" if value else "Outside tolerance"
         if path == ("date_of_analysis",) and isinstance(value, str):
             try:
-                return datetime.fromisoformat(value).strftime("%d %B %Y, %H:%M:%S %Z").strip()
+                return (
+                    datetime.fromisoformat(value)
+                    .strftime("%d %B %Y, %H:%M:%S %Z")
+                    .strip()
+                )
             except ValueError:
                 pass
         return _value(value)
@@ -461,10 +487,7 @@ class DetailedReport:
     ) -> LongTable:
         table_rows = [[self._paragraph(name, "ReportHeader") for name in headings]]
         table_rows.extend(
-            [
-                self._paragraph(_value(value), "ReportCell")
-                for value in row
-            ]
+            [self._paragraph(_value(value), "ReportCell") for value in row]
             for row in rows
         )
         try:
@@ -484,7 +507,12 @@ class DetailedReport:
             TableStyle(
                 [
                     ("BACKGROUND", (0, 0), (-1, 0), self._primary),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [self._paper, self._row_background]),
+                    (
+                        "ROWBACKGROUNDS",
+                        (0, 1),
+                        (-1, -1),
+                        [self._paper, self._row_background],
+                    ),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 8),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 8),
@@ -657,7 +685,9 @@ class DetailedReport:
             for index, (name, limit) in enumerate(limits):
                 line_color = self._failure if index == 0 else self._warning
                 dash = [4, 2] if index == 0 else [1, 2]
-                position = chart.y + (limit - minimum) / (maximum - minimum) * chart.height
+                position = (
+                    chart.y + (limit - minimum) / (maximum - minimum) * chart.height
+                )
                 drawing.add(
                     Line(
                         chart.x,
@@ -691,7 +721,9 @@ class DetailedReport:
                     )
                 )
             section_title = (
-                f"{title} ({page_index + 1} of {page_count})" if page_count > 1 else title
+                f"{title} ({page_index + 1} of {page_count})"
+                if page_count > 1
+                else title
             )
             self._story.append(PageBreak())
             self._story.extend(self._section(section_title))
@@ -712,8 +744,7 @@ class DetailedReport:
             raise ValueError(f"Histogram '{title}' needs finite measurements.")
         counts, edges = np.histogram(values, bins=bins)
         categories = [
-            f"{left:.3g} to {right:.3g}"
-            for left, right in zip(edges[:-1], edges[1:])
+            f"{left:.3g} to {right:.3g}" for left, right in zip(edges[:-1], edges[1:])
         ]
         self.add_bar_chart(
             title,
@@ -727,14 +758,22 @@ class DetailedReport:
 
     def _overview(self) -> list[Flowable]:
         passed = self.values.get("passed")
-        status = "Within tolerance" if passed is True else "Outside tolerance" if passed is False else "Not assessed"
+        status = (
+            "Within tolerance"
+            if passed is True
+            else "Outside tolerance"
+            if passed is False
+            else "Not assessed"
+        )
         story: list[Flowable] = [
             self._paragraph(self.title, "Title"),
             Spacer(1, 8),
             self._paragraph(f"Test outcome: {status}", "Heading2"),
         ]
         identity = {
-            "Date of analysis": self._measurement_value(self.values.get("date_of_analysis"), ("date_of_analysis",)),
+            "Date of analysis": self._measurement_value(
+                self.values.get("date_of_analysis"), ("date_of_analysis",)
+            ),
             "Analysis software version": self.values.get("pylinac_version"),
             **self._context,
         }
@@ -769,7 +808,10 @@ class DetailedReport:
                     self._paragraph(f"Analysis warnings ({len(warnings)})", "Heading2"),
                     self._table(
                         ("Warning", "Details"),
-                        ((index + 1, warning) for index, warning in enumerate(warnings)),
+                        (
+                            (index + 1, warning)
+                            for index, warning in enumerate(warnings)
+                        ),
                         (CONTENT_WIDTH * 0.12, CONTENT_WIDTH * 0.88),
                     ),
                 ]
@@ -780,7 +822,10 @@ class DetailedReport:
                     self._paragraph("Site and review information", "Heading2"),
                     self._table(
                         ("Field", "Value"),
-                        ((_label(str(key)), value) for key, value in self._metadata.items()),
+                        (
+                            (_label(str(key)), value)
+                            for key, value in self._metadata.items()
+                        ),
                         (CONTENT_WIDTH * 0.4, CONTENT_WIDTH * 0.6),
                     ),
                 ]
@@ -791,7 +836,9 @@ class DetailedReport:
             story.extend(self._paragraph(note) for note in notes)
         return story
 
-    def _result_tables(self, value: object, path: tuple[str | int, ...]) -> list[Flowable]:
+    def _result_tables(
+        self, value: object, path: tuple[str | int, ...]
+    ) -> list[Flowable]:
         labels = self._table_labels.get(str(path[0]), ReportTableLabels())
         if isinstance(value, dict) and value:
             sequences: dict[str, list[object]] = {}
@@ -816,12 +863,19 @@ class DetailedReport:
                         indices = list(range(start, min(start + 6, length)))
                         tables.append(
                             self._table(
-                                [labels.row_heading] + [f"{labels.series_heading} {index + 1}" for index in indices],
+                                [labels.row_heading]
+                                + [
+                                    f"{labels.series_heading} {index + 1}"
+                                    for index in indices
+                                ],
                                 (
                                     [labels.row_labels.get(key, _label(key))]
                                     + [
-                                        self._measurement_value(child[index], path + (key, index))
-                                        if index < len(child) else "Not recorded"
+                                        self._measurement_value(
+                                            child[index], path + (key, index)
+                                        )
+                                        if index < len(child)
+                                        else "Not recorded"
                                         for index in indices
                                     ]
                                     for key, child in sequences.items()
@@ -834,31 +888,43 @@ class DetailedReport:
                     return tables
             objects: dict[str, dict[str, object]] = {}
             for key, child in value.items():
-                if not isinstance(child, dict) or not child or any(
-                    isinstance(item, (dict, list)) for item in child.values()
+                if (
+                    not isinstance(child, dict)
+                    or not child
+                    or any(isinstance(item, (dict, list)) for item in child.values())
                 ):
                     break
                 objects[str(key)] = child
             else:
-                columns = list(dict.fromkeys(key for child in objects.values() for key in child))
+                columns = list(
+                    dict.fromkeys(key for child in objects.values() for key in child)
+                )
                 if columns:
                     tables = []
                     for start in range(0, len(columns), 6):
                         selection = columns[start : start + 6]
                         tables.append(
                             self._table(
-                                [labels.row_heading] + [labels.column_labels.get(column, _label(column)) for column in selection],
+                                [labels.row_heading]
+                                + [
+                                    labels.column_labels.get(column, _label(column))
+                                    for column in selection
+                                ],
                                 (
                                     [labels.row_labels.get(key, _label(key))]
                                     + [
-                                        self._measurement_value(child[column], path + (key, column))
-                                        if column in child else "Not recorded"
+                                        self._measurement_value(
+                                            child[column], path + (key, column)
+                                        )
+                                        if column in child
+                                        else "Not recorded"
                                         for column in selection
                                     ]
                                     for key, child in objects.items()
                                 ),
                                 [CONTENT_WIDTH * 0.22]
-                                + [CONTENT_WIDTH * 0.78 / len(selection)] * len(selection),
+                                + [CONTENT_WIDTH * 0.78 / len(selection)]
+                                * len(selection),
                             )
                         )
                         tables.append(Spacer(1, 8))
@@ -867,7 +933,10 @@ class DetailedReport:
             self._table(
                 (labels.row_heading, labels.value_heading),
                 (
-                    (self._measurement_label(location), self._measurement_value(measurement, location))
+                    (
+                        self._measurement_label(location),
+                        self._measurement_value(measurement, location),
+                    )
                     for location, measurement in _leaves(value, path)
                 ),
                 (CONTENT_WIDTH * 0.68, CONTENT_WIDTH * 0.32),
@@ -913,7 +982,9 @@ class DetailedReport:
                 mask="auto",
                 anchor="sw",
             )
-        self._page_header.drawOn(canvas, self._header_x, A4[1] - cm - self._header_height)
+        self._page_header.drawOn(
+            canvas, self._header_x, A4[1] - cm - self._header_height
+        )
         canvas.setStrokeColor(self._primary)
         header_line = A4[1] - self._top_margin + 0.5 * cm
         canvas.line(1.8 * cm, header_line, A4[0] - 1.8 * cm, header_line)
