@@ -798,6 +798,7 @@ class ACRCT(CatPhanBase, ResultsDataMixin[ACRCTResult]):
             publish_analysis_report(
                 self.results_data(), filename, title=f"{self._model} Analysis",
                 context={"Phantom model": self._model, "Number of scan images": self.num_images},
+                scan_images=[Path(img.path).name for img in self.dicom_stack],
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
                 plots={"ACR CT module artifacts": lambda: self.plot_images(show=False)},
                 open_file=open_file,
@@ -2346,6 +2347,7 @@ class ACRMRILarge(CatPhanBase, ResultsDataMixin[ACRMRIResult]):
             publish_analysis_report(
                 self.results_data(), filename, title=f"{self._model} Analysis",
                 context={"Phantom model": self._model, "Number of scan images": self.num_images},
+                scan_images=[Path(img.path).name for img in self.dicom_stack],
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
                 plots={"ACR MRI module artifacts": lambda: self.plot_images(show=False)},
                 open_file=open_file,
