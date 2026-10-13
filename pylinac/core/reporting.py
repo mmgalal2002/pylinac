@@ -5,14 +5,17 @@ from __future__ import annotations
 import io
 import json
 import math
+import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import BinaryIO
 from xml.sax.saxutils import escape
 
 import numpy as np
 from PIL import Image as PILImage
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field as ModelField
 from reportlab.graphics.charts.barcharts import VerticalBarChart
 from reportlab.graphics.shapes import Drawing, Line, String
 from reportlab.lib import colors
@@ -20,6 +23,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.pdfbase import pdfdoc
+from reportlab.pdfbase.pdfmetrics import getFont
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     Flowable,
@@ -33,13 +37,93 @@ from reportlab.platypus import (
 )
 from reportlab.platypus.tableofcontents import TableOfContents
 
-INK = colors.HexColor("#20272B")
-GREEN = colors.HexColor("#20864B")
-LIGHT = colors.HexColor("#F3F6F5")
-LINE = colors.HexColor("#D7DFDC")
-RED = colors.HexColor("#B52E38")
-AMBER = colors.HexColor("#9B6507")
 CONTENT_WIDTH = A4[0] - 3.6 * cm - 12
+
+
+class ReportBranding(BaseModel):
+    """Full visual identity for a detailed medical physics report.
+
+    Parameters
+    ----------
+    name : str
+        Report owner shown in the page header and PDF author metadata.
+    report_title : str, optional
+        Custom title. The analysis name is used when no title is supplied.
+    header_text, footer_text : str
+        Page header and footer wording. A default footer uses the report owner.
+    body_font, heading_font : str
+        ReportLab font names. Custom fonts must be registered before publishing.
+    font_size : float
+        Base size, between 9 and 14 points. Other text sizes follow this value.
+    primary_color, text_color, muted_color, background_color : str
+        Brand accent, main text, supporting text and page colours.
+    table_background_color, table_header_text_color, border_color : str
+        Alternating row, table-header text and divider colours.
+    chart_color, failure_color, warning_color : str
+        Measurement, failed-result and warning colours. Measurements use the
+        primary colour when no separate chart colour is supplied.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str = "Pylinac"
+    report_title: str | None = None
+    header_text: str = "Medical physics quality assurance"
+    footer_text: str | None = None
+    body_font: str = "Helvetica"
+    heading_font: str = "Helvetica-Bold"
+    font_size: float = ModelField(default=10, ge=9, le=14)
+    primary_color: str = "#20864B"
+    text_color: str = "#20272B"
+    muted_color: str = "#52615A"
+    background_color: str = "#FFFFFF"
+    table_background_color: str = "#F3F6F5"
+    table_header_text_color: str = "#FFFFFF"
+    border_color: str = "#D7DFDC"
+    chart_color: str | None = None
+    failure_color: str = "#B52E38"
+    warning_color: str = "#9B6507"
+
+
+@dataclass(frozen=True)
+class ReportField:
+    """Clinical wording for a result without changing its stored data.
+
+    Parameters
+    ----------
+    label : str
+        Human-readable measurement name, including verified units.
+    explanation : str
+        Short clinical explanation, rather than a description of Python types.
+    numbered : bool
+        Display a stored zero-based integer identifier as a one-based number.
+    missing_label : str
+        Wording used when the measurement is null.
+    """
+
+    label: str
+    explanation: str = ""
+    numbered: bool = False
+    missing_label: str = "Not reported"
+
+
+@dataclass(frozen=True)
+class ReportTableLabels:
+    """Human labels for complete measurement tables.
+
+    Parameters
+    ----------
+    row_heading, series_heading, value_heading : str
+        Names used for measurement identifiers, ordered measurements and values.
+    row_labels, column_labels : mapping
+        Explicit clinical names for stored identifiers and submeasurements.
+    """
+
+    row_heading: str = "Measurement"
+    series_heading: str = "Measurement"
+    value_heading: str = "Value"
+    row_labels: Mapping[str, str] = field(default_factory=dict)
+    column_labels: Mapping[str, str] = field(default_factory=dict)
 
 
 class _SectionMarker(Flowable):
@@ -98,28 +182,48 @@ def _attach_json(canvas: Canvas, content: bytes) -> None:
 
 
 def _label(name: str) -> str:
-    return name.replace("_", " ").capitalize()
+    words = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", name).replace("_", " ").split()
+    terms = {
+        "cax": "central axis",
+        "mlc": "multileaf collimator",
+        "roi": "region of interest",
+        "mtf": "modulation transfer function",
+        "snr": "signal-to-noise ratio",
+        "cnr": "contrast-to-noise ratio",
+        "mm": "(mm)",
+        "pct": "(%)",
+        "hu": "CT number (HU)",
+        "x": "X component",
+        "y": "Y component",
+        "z": "Z component",
+    }
+    text = " ".join(terms.get(word.lower(), word) for word in words)
+    return text[:1].upper() + text[1:]
 
 
 def _value(value: object) -> str:
     if value is None:
-        return "Not available"
+        return "Not reported"
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, float):
         return format(value, ".8g")
-    if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=True)
+    if isinstance(value, dict):
+        return "; ".join(f"{_label(str(key))}: {_value(child)}" for key, child in value.items()) or "No recorded items"
+    if isinstance(value, list):
+        return "; ".join(_value(child) for child in value) or "No recorded items"
     return str(value)
 
 
-def _leaves(value: object, path: str) -> Iterator[tuple[str, object]]:
+def _leaves(
+    value: object, path: tuple[str | int, ...]
+) -> Iterator[tuple[tuple[str | int, ...], object]]:
     if isinstance(value, dict) and value:
         for key, child in value.items():
-            yield from _leaves(child, f"{path}[{json.dumps(str(key))}]")
+            yield from _leaves(child, path + (str(key),))
     elif isinstance(value, list) and value:
         for index, child in enumerate(value):
-            yield from _leaves(child, f"{path}[{index}]")
+            yield from _leaves(child, path + (index,))
     else:
         yield path, value
 
@@ -142,6 +246,13 @@ class DetailedReport:
         User-supplied notes.
     logo : Path or str, optional
         Local custom logo. The default logo is used only when packaged locally.
+    fields : mapping, optional
+        Clinical wording keyed by structured field components. A ``"*"``
+        component matches a measurement identifier or list entry.
+    table_labels : mapping, optional
+        Clinical row and column names for each top-level measurement collection.
+    branding : ReportBranding or mapping, optional
+        Full report identity. Defaults to the Pylinac clinical report theme.
     """
 
     def __init__(
@@ -152,75 +263,134 @@ class DetailedReport:
         metadata: Mapping[str, object] | None = None,
         notes: str | Sequence[str] | None = None,
         logo: Path | str | None = None,
+        fields: Mapping[tuple[str, ...], ReportField] | None = None,
+        table_labels: Mapping[str, ReportTableLabels] | None = None,
+        branding: ReportBranding | Mapping[str, object] | None = None,
     ) -> None:
-        self.title = title
+        self.branding = branding if isinstance(branding, ReportBranding) else ReportBranding.model_validate(branding or {})
+        self.title = self.branding.report_title or title
+        self._primary = colors.toColor(self.branding.primary_color)
+        self._ink = colors.toColor(self.branding.text_color)
+        self._muted = colors.toColor(self.branding.muted_color)
+        self._paper = colors.toColor(self.branding.background_color)
+        self._row_background = colors.toColor(self.branding.table_background_color)
+        self._header_ink = colors.toColor(self.branding.table_header_text_color)
+        self._line = colors.toColor(self.branding.border_color)
+        self._chart = colors.toColor(self.branding.chart_color or self.branding.primary_color)
+        self._failure = colors.toColor(self.branding.failure_color)
+        self._warning = colors.toColor(self.branding.warning_color)
+        for font in (self.branding.body_font, self.branding.heading_font):
+            try:
+                getFont(font)
+            except KeyError as error:
+                raise ValueError(f"Register the report font '{font}' before publishing.") from error
         self.results_json = results.model_dump_json()
         values = json.loads(self.results_json)
         if not isinstance(values, dict):
             raise TypeError("Detailed reports require a JSON object of results.")
         self.values: dict[str, object] = values
         self._fields = type(results).model_fields
+        self._presentation = {
+            ("pylinac_version",): ReportField("Analysis software version"),
+            ("date_of_analysis",): ReportField("Date of analysis"),
+            ("warnings",): ReportField("Analysis warnings"),
+            ("passed",): ReportField("Overall test result"),
+            **(fields or {}),
+        }
+        self._table_labels = table_labels or {}
         self._context = context or {}
         self._metadata = metadata or {}
         self._notes = notes
         self._story: list[Flowable] = []
         self._section_id = 0
         self._styles = getSampleStyleSheet()
+        font_size = self.branding.font_size
         for name in ("Normal", "BodyText", "Heading1", "Heading2", "Title"):
-            self._styles[name].textColor = INK
-        self._styles["Title"].fontSize = 23
-        self._styles["Title"].leading = 28
+            self._styles[name].textColor = self._ink
+            self._styles[name].fontName = self.branding.body_font
+            self._styles[name].fontSize = font_size
+            self._styles[name].leading = font_size * 1.4
+        for name in ("Heading1", "Heading2", "Title"):
+            self._styles[name].fontName = self.branding.heading_font
+            self._styles[name].textColor = self._primary
+        self._styles["Title"].fontSize = font_size * 2.3
+        self._styles["Title"].leading = font_size * 2.8
         self._styles["Title"].alignment = 0
-        self._styles["Heading1"].fontSize = 16
-        self._styles["Heading1"].leading = 20
+        self._styles["Heading1"].fontSize = font_size * 1.6
+        self._styles["Heading1"].leading = font_size * 2
         self._styles["Heading1"].spaceAfter = 10
-        self._styles["Heading2"].fontSize = 12
-        self._styles["Heading2"].leading = 16
+        self._styles["Heading2"].fontSize = font_size * 1.2
+        self._styles["Heading2"].leading = font_size * 1.6
         self._styles["Heading2"].spaceBefore = 12
-        self._styles["BodyText"].leading = 14
         self._styles.add(
             ParagraphStyle(
                 "ReportCell",
-                fontName="Helvetica",
-                fontSize=9,
-                leading=12,
-                textColor=INK,
+                fontName=self.branding.body_font,
+                fontSize=font_size - 1,
+                leading=(font_size - 1) * 1.35,
+                textColor=self._ink,
                 splitLongWords=True,
-            )
-        )
-        self._styles.add(
-            ParagraphStyle(
-                "ReportPath",
-                parent=self._styles["ReportCell"],
-                fontSize=7,
-                leading=10,
             )
         )
         self._styles.add(
             ParagraphStyle(
                 "ReportHeader",
                 parent=self._styles["ReportCell"],
-                fontName="Helvetica-Bold",
-                textColor=colors.white,
+                fontName=self.branding.heading_font,
+                textColor=self._header_ink,
             )
         )
         self._styles.add(
             ParagraphStyle(
                 "ReportCaption",
                 parent=self._styles["BodyText"],
-                fontSize=9,
-                leading=12,
-                textColor=colors.HexColor("#52615A"),
+                fontSize=font_size - 1,
+                leading=(font_size - 1) * 1.35,
+                textColor=self._muted,
                 spaceBefore=8,
+            )
+        )
+        self._styles.add(
+            ParagraphStyle(
+                "ReportPageHeader",
+                fontName=self.branding.heading_font,
+                fontSize=font_size,
+                leading=font_size * 1.4,
+                textColor=self._primary,
+            )
+        )
+        self._styles.add(
+            ParagraphStyle(
+                "ReportPageFooter",
+                fontName=self.branding.body_font,
+                fontSize=font_size - 2,
+                leading=(font_size - 2) * 1.3,
+                textColor=self._muted,
             )
         )
         self._logo = Path(logo) if logo is not None else None
         if self._logo is not None and not self._logo.is_file():
             raise FileNotFoundError(f"Report logo does not exist: {self._logo}")
-        if self._logo is None:
+        if self._logo is None and self.branding.name == "Pylinac":
             packaged = Path(__file__).parent.parent / "files" / "Pylinac-GREEN.png"
             if packaged.is_file():
                 self._logo = packaged
+        self._page_header = self._paragraph(
+            "\n".join(text for text in (self.branding.name, self.branding.header_text) if text),
+            "ReportPageHeader",
+        )
+        self._header_x = 6.0 * cm if self._logo is not None else 1.8 * cm
+        header_width = A4[0] - self._header_x - 1.8 * cm
+        _, self._header_height = self._page_header.wrap(header_width, A4[1])
+        self._top_margin = max(2.7 * cm, self._header_height + 1.5 * cm)
+        footer_text = self.branding.footer_text
+        if footer_text is None:
+            footer_text = f"{self.branding.name} | Medical physics quality assurance"
+        self._page_footer = self._paragraph(footer_text, "ReportPageFooter")
+        _, self._footer_height = self._page_footer.wrap(CONTENT_WIDTH - 65, A4[1])
+        self._bottom_margin = max(2.0 * cm, self._footer_height + 1.5 * cm)
+        if self._top_margin + self._bottom_margin > A4[1] - 8 * cm:
+            raise ValueError("The report header and footer leave too little space for measurements.")
 
     def _paragraph(self, text: object, style: str = "BodyText") -> Paragraph:
         return Paragraph(
@@ -236,24 +406,64 @@ class DetailedReport:
         ]
 
     def _field_title(self, key: str) -> str:
+        presentation = self._presentation.get((key,))
+        if presentation is not None:
+            return presentation.label
         field = self._fields.get(key)
-        return (field.title if field is not None else None) or _label(key)
+        return _label((field.title if field is not None else None) or key)
+
+    def _field_presentation(self, path: tuple[str | int, ...]) -> ReportField | None:
+        exact = tuple(str(part) for part in path)
+        presentation = self._presentation.get(exact)
+        if presentation is not None or len(path) < 2:
+            return presentation
+        wildcard = (str(path[0]),) + ("*",) * (len(path) - 2) + (str(path[-1]),)
+        return self._presentation.get(wildcard)
+
+    def _measurement_label(self, path: tuple[str | int, ...]) -> str:
+        presentation = self._field_presentation(path)
+        if presentation is not None:
+            return presentation.label
+        labels = self._table_labels.get(str(path[0]), ReportTableLabels())
+        parts = path[1:] or path
+        return ": ".join(
+            f"{labels.series_heading} {part + 1}"
+            if isinstance(part, int)
+            else labels.row_labels.get(part, _label(part))
+            for part in parts
+        )
+
+    def _measurement_value(self, value: object, path: tuple[str | int, ...]) -> str:
+        presentation = self._field_presentation(path)
+        if value is None:
+            return presentation.missing_label if presentation is not None else "Not reported"
+        if (
+            presentation is not None
+            and presentation.numbered
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+        ):
+            return str(value + 1)
+        if path == ("passed",) and isinstance(value, bool):
+            return "Within tolerance" if value else "Outside tolerance"
+        if path == ("date_of_analysis",) and isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value).strftime("%d %B %Y, %H:%M:%S %Z").strip()
+            except ValueError:
+                pass
+        return _value(value)
 
     def _table(
         self,
         headings: Sequence[str],
         rows: Iterable[Sequence[object]],
         widths: Sequence[float],
-        path_column: int | None = None,
     ) -> LongTable:
         table_rows = [[self._paragraph(name, "ReportHeader") for name in headings]]
         table_rows.extend(
             [
-                self._paragraph(
-                    _value(value),
-                    "ReportPath" if index == path_column else "ReportCell",
-                )
-                for index, value in enumerate(row)
+                self._paragraph(_value(value), "ReportCell")
+                for value in row
             ]
             for row in rows
         )
@@ -273,15 +483,15 @@ class DetailedReport:
         table.setStyle(
             TableStyle(
                 [
-                    ("BACKGROUND", (0, 0), (-1, 0), GREEN),
-                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT]),
+                    ("BACKGROUND", (0, 0), (-1, 0), self._primary),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [self._paper, self._row_background]),
                     ("VALIGN", (0, 0), (-1, -1), "TOP"),
                     ("LEFTPADDING", (0, 0), (-1, -1), 8),
                     ("RIGHTPADDING", (0, 0), (-1, -1), 8),
                     ("TOPPADDING", (0, 0), (-1, -1), 6),
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                    ("LINEBELOW", (0, 0), (-1, 0), 0.5, GREEN),
-                    ("LINEBELOW", (0, 1), (-1, -1), 0.25, LINE),
+                    ("LINEBELOW", (0, 0), (-1, 0), 0.5, self._primary),
+                    ("LINEBELOW", (0, 1), (-1, -1), 0.25, self._line),
                 ]
             )
         )
@@ -386,35 +596,39 @@ class DetailedReport:
             chart.valueAxis.valueMin = minimum
             chart.valueAxis.valueMax = maximum
             chart.valueAxis.visibleGrid = True
-            chart.valueAxis.gridStrokeColor = LINE
-            chart.valueAxis.labels.fontName = "Helvetica"
-            chart.valueAxis.labels.fontSize = 9
+            chart.valueAxis.gridStrokeColor = self._line
+            chart.valueAxis.strokeColor = self._ink
+            chart.valueAxis.labels.fillColor = self._ink
+            chart.valueAxis.labels.fontName = self.branding.body_font
+            chart.valueAxis.labels.fontSize = self.branding.font_size - 1
             chart.valueAxis.labelTextFormat = "%d" if whole_values else "%.3g"
             if whole_values:
                 chart.valueAxis.valueStep = max(1, math.ceil((maximum - minimum) / 5))
             chart.categoryAxis.categoryNames = [
                 f"{name} *" if name in failed else name for name in page_categories
             ]
-            chart.categoryAxis.labels.fontName = "Helvetica"
-            chart.categoryAxis.labels.fontSize = 9
+            chart.categoryAxis.strokeColor = self._ink
+            chart.categoryAxis.labels.fillColor = self._ink
+            chart.categoryAxis.labels.fontName = self.branding.body_font
+            chart.categoryAxis.labels.fontSize = self.branding.font_size - 1
             chart.categoryAxis.labels.angle = 45
             chart.categoryAxis.labels.boxAnchor = "ne"
             chart.categoryAxis.labels.dy = -5
-            chart.bars[0].fillColor = GREEN
-            chart.bars[0].strokeColor = INK
+            chart.bars[0].fillColor = self._chart
+            chart.bars[0].strokeColor = self._ink
             chart.bars[0].strokeWidth = 0.3
             for index, category in enumerate(page_categories):
                 if category in failed:
-                    chart.bars[(0, index)].fillColor = RED
+                    chart.bars[(0, index)].fillColor = self._failure
             drawing.add(chart)
             drawing.add(
                 String(
                     0,
                     329,
                     value_label,
-                    fontName="Helvetica-Bold",
-                    fontSize=10,
-                    fillColor=INK,
+                    fontName=self.branding.heading_font,
+                    fontSize=self.branding.font_size,
+                    fillColor=self._ink,
                 )
             )
             drawing.add(
@@ -423,9 +637,9 @@ class DetailedReport:
                     8,
                     category_label,
                     textAnchor="middle",
-                    fontName="Helvetica",
-                    fontSize=9,
-                    fillColor=INK,
+                    fontName=self.branding.body_font,
+                    fontSize=self.branding.font_size - 1,
+                    fillColor=self._ink,
                 )
             )
             if failed:
@@ -435,13 +649,13 @@ class DetailedReport:
                         329,
                         "* Failed leaf",
                         textAnchor="end",
-                        fontName="Helvetica",
-                        fontSize=9,
-                        fillColor=RED,
+                        fontName=self.branding.body_font,
+                        fontSize=self.branding.font_size - 1,
+                        fillColor=self._failure,
                     )
                 )
             for index, (name, limit) in enumerate(limits):
-                line_color = RED if index == 0 else AMBER
+                line_color = self._failure if index == 0 else self._warning
                 dash = [4, 2] if index == 0 else [1, 2]
                 position = chart.y + (limit - minimum) / (maximum - minimum) * chart.height
                 drawing.add(
@@ -471,9 +685,9 @@ class DetailedReport:
                         22,
                         legend_y,
                         f"{name}: {_value(limit)}",
-                        fontName="Helvetica",
-                        fontSize=9,
-                        fillColor=INK,
+                        fontName=self.branding.body_font,
+                        fontSize=self.branding.font_size - 1,
+                        fillColor=self._ink,
                     )
                 )
             section_title = (
@@ -513,26 +727,26 @@ class DetailedReport:
 
     def _overview(self) -> list[Flowable]:
         passed = self.values.get("passed")
-        status = "PASSED" if passed is True else "FAILED" if passed is False else "Not evaluated"
+        status = "Within tolerance" if passed is True else "Outside tolerance" if passed is False else "Not assessed"
         story: list[Flowable] = [
             self._paragraph(self.title, "Title"),
             Spacer(1, 8),
-            self._paragraph(f"Analysis status: {status}", "Heading2"),
+            self._paragraph(f"Test outcome: {status}", "Heading2"),
         ]
         identity = {
-            "Analysis date": self.values.get("date_of_analysis"),
-            "Pylinac version": self.values.get("pylinac_version"),
+            "Date of analysis": self._measurement_value(self.values.get("date_of_analysis"), ("date_of_analysis",)),
+            "Analysis software version": self.values.get("pylinac_version"),
             **self._context,
         }
         story.append(
             self._table(
-                ("Report identity", "Value"),
+                ("Test information", "Details"),
                 identity.items(),
                 (CONTENT_WIDTH * 0.4, CONTENT_WIDTH * 0.6),
             )
         )
         summary = [
-            (self._field_title(key), value)
+            (self._field_title(key), self._measurement_value(value, (key,)))
             for key, value in self.values.items()
             if not isinstance(value, (dict, list))
             and key not in {"date_of_analysis", "pylinac_version"}
@@ -563,10 +777,10 @@ class DetailedReport:
         if self._metadata:
             story.extend(
                 [
-                    self._paragraph("Report metadata", "Heading2"),
+                    self._paragraph("Site and review information", "Heading2"),
                     self._table(
                         ("Field", "Value"),
-                        self._metadata.items(),
+                        ((_label(str(key)), value) for key, value in self._metadata.items()),
                         (CONTENT_WIDTH * 0.4, CONTENT_WIDTH * 0.6),
                     ),
                 ]
@@ -577,7 +791,8 @@ class DetailedReport:
             story.extend(self._paragraph(note) for note in notes)
         return story
 
-    def _result_tables(self, value: object, path: str) -> list[Flowable]:
+    def _result_tables(self, value: object, path: tuple[str | int, ...]) -> list[Flowable]:
+        labels = self._table_labels.get(str(path[0]), ReportTableLabels())
         if isinstance(value, dict) and value:
             sequences: dict[str, list[object]] = {}
             for key, child in value.items():
@@ -591,8 +806,8 @@ class DetailedReport:
                 if length:
                     tables: list[Flowable] = [
                         self._paragraph(
-                            "Index columns are 0-based. 'No entry' means that index "
-                            "is absent from the list, not a measured value.",
+                            "Measurements are listed in their recorded order. "
+                            "'Not recorded' means no measurement was supplied at that position.",
                             "ReportCaption",
                         ),
                         Spacer(1, 6),
@@ -601,11 +816,12 @@ class DetailedReport:
                         indices = list(range(start, min(start + 6, length)))
                         tables.append(
                             self._table(
-                                ["JSON key"] + [f"Index {index}" for index in indices],
+                                [labels.row_heading] + [f"{labels.series_heading} {index + 1}" for index in indices],
                                 (
-                                    [key]
+                                    [labels.row_labels.get(key, _label(key))]
                                     + [
-                                        child[index] if index < len(child) else "No entry"
+                                        self._measurement_value(child[index], path + (key, index))
+                                        if index < len(child) else "Not recorded"
                                         for index in indices
                                     ]
                                     for key, child in sequences.items()
@@ -618,7 +834,7 @@ class DetailedReport:
                     return tables
             objects: dict[str, dict[str, object]] = {}
             for key, child in value.items():
-                if not isinstance(child, dict) or any(
+                if not isinstance(child, dict) or not child or any(
                     isinstance(item, (dict, list)) for item in child.values()
                 ):
                     break
@@ -631,9 +847,14 @@ class DetailedReport:
                         selection = columns[start : start + 6]
                         tables.append(
                             self._table(
-                                ["JSON key"] + selection,
+                                [labels.row_heading] + [labels.column_labels.get(column, _label(column)) for column in selection],
                                 (
-                                    [key] + [child.get(column, "No entry") for column in selection]
+                                    [labels.row_labels.get(key, _label(key))]
+                                    + [
+                                        self._measurement_value(child[column], path + (key, column))
+                                        if column in child else "Not recorded"
+                                        for column in selection
+                                    ]
                                     for key, child in objects.items()
                                 ),
                                 [CONTENT_WIDTH * 0.22]
@@ -644,30 +865,31 @@ class DetailedReport:
                     return tables
         return [
             self._table(
-                ("JSON field path", "Value"),
-                _leaves(value, path),
+                (labels.row_heading, labels.value_heading),
+                (
+                    (self._measurement_label(location), self._measurement_value(measurement, location))
+                    for location, measurement in _leaves(value, path)
+                ),
                 (CONTENT_WIDTH * 0.68, CONTENT_WIDTH * 0.32),
-                path_column=0,
             )
         ]
 
     def _complete_results(self) -> list[Flowable]:
         story: list[Flowable] = [PageBreak()]
-        story.extend(self._section("Complete analysis results"))
+        story.extend(self._section("Detailed measurements"))
         story.append(
             self._paragraph(
-                "All results are listed below. Display values use up to eight significant "
-                "digits; the attached results.json preserves the original JSON precision.",
+                "All recorded measurements are listed below. Numbers are rounded for "
+                "readability; the attached measurement data retain full precision.",
                 "ReportCaption",
             )
         )
         for key, value in self.values.items():
-            field = self._fields.get(key)
-            path = f"$[{json.dumps(key)}]"
+            presentation = self._presentation.get((key,))
+            path = (key,)
             story.extend(self._section(self._field_title(key), level=1))
-            story.append(self._paragraph(path, "ReportPath"))
-            if field is not None and field.description:
-                story.append(self._paragraph(field.description, "ReportCaption"))
+            if presentation is not None and presentation.explanation:
+                story.append(self._paragraph(presentation.explanation, "ReportCaption"))
             story.append(Spacer(1, 6))
             story.extend(self._result_tables(value, path))
         return story
@@ -678,6 +900,8 @@ class DetailedReport:
             canvas.setCreator("Pylinac detailed reports")
             canvas.showOutline()
         canvas.saveState()
+        canvas.setFillColor(self._paper)
+        canvas.rect(0, 0, A4[0], A4[1], stroke=0, fill=1)
         if self._logo is not None:
             canvas.drawImage(
                 str(self._logo),
@@ -689,17 +913,17 @@ class DetailedReport:
                 mask="auto",
                 anchor="sw",
             )
-        else:
-            canvas.setFont("Helvetica-Bold", 14)
-            canvas.setFillColor(GREEN)
-            canvas.drawString(1.8 * cm, A4[1] - 1.7 * cm, "PYLINAC")
-        canvas.setStrokeColor(LINE)
-        canvas.line(1.8 * cm, A4[1] - 2.2 * cm, A4[0] - 1.8 * cm, A4[1] - 2.2 * cm)
-        canvas.line(1.8 * cm, 1.5 * cm, A4[0] - 1.8 * cm, 1.5 * cm)
-        canvas.setFont("Helvetica", 8)
-        canvas.setFillColor(INK)
-        canvas.drawString(1.8 * cm, 1.0 * cm, "Pylinac QA report")
-        canvas.drawRightString(A4[0] - 1.8 * cm, 1.0 * cm, f"Page {document.page}")
+        self._page_header.drawOn(canvas, self._header_x, A4[1] - cm - self._header_height)
+        canvas.setStrokeColor(self._primary)
+        header_line = A4[1] - self._top_margin + 0.5 * cm
+        canvas.line(1.8 * cm, header_line, A4[0] - 1.8 * cm, header_line)
+        canvas.setStrokeColor(self._line)
+        footer_line = self._bottom_margin - 0.5 * cm
+        canvas.line(1.8 * cm, footer_line, A4[0] - 1.8 * cm, footer_line)
+        self._page_footer.drawOn(canvas, 1.8 * cm, 0.6 * cm)
+        canvas.setFont(self.branding.body_font, self.branding.font_size - 2)
+        canvas.setFillColor(self._muted)
+        canvas.drawRightString(A4[0] - 1.8 * cm, 0.6 * cm + 2, f"Page {document.page}")
         canvas.restoreState()
 
     def write(self, filename: str | Path | BinaryIO) -> None:
@@ -709,28 +933,28 @@ class DetailedReport:
             pagesize=A4,
             leftMargin=1.8 * cm,
             rightMargin=1.8 * cm,
-            topMargin=2.7 * cm,
-            bottomMargin=2.0 * cm,
+            topMargin=self._top_margin,
+            bottomMargin=self._bottom_margin,
             title=self.title,
-            author="Pylinac",
+            author=self.branding.name,
         )
         contents = TableOfContents()
         contents.levelStyles = [
             ParagraphStyle(
                 "ReportContents",
-                fontName="Helvetica-Bold",
-                fontSize=10,
-                leading=15,
+                fontName=self.branding.heading_font,
+                fontSize=self.branding.font_size,
+                leading=self.branding.font_size * 1.5,
                 spaceBefore=5,
-                textColor=INK,
+                textColor=self._ink,
             ),
             ParagraphStyle(
                 "ReportContentsDetail",
-                fontName="Helvetica",
-                fontSize=9,
-                leading=13,
+                fontName=self.branding.body_font,
+                fontSize=self.branding.font_size - 1,
+                leading=(self.branding.font_size - 1) * 1.45,
                 leftIndent=12,
-                textColor=INK,
+                textColor=self._ink,
             ),
         ]
         document.multiBuild(
