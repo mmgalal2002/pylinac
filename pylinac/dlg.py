@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from math import ceil, floor
+from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -85,6 +87,67 @@ class DLG:
         self.measured_dlg = dlg
         self.planned_dlg_per_leaf = planned_dlg_per_leaf
         self.measured_dlg_per_leaf = measured_dlg_per_leaf
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: Path | str | None = None,
+        *,
+        detailed: bool = True,
+        branding: Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish measured leaf-gap results, the fitted curve and image.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Review notes.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Site and review information.
+        logo : str or Path, optional
+            Local logo.
+        detailed : bool
+            Must be True; DLG had no legacy PDF report.
+        branding : mapping, optional
+            Full identity; see :class:`~pylinac.core.reporting.ReportBranding`.
+        """
+        from .core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("DLG has no legacy PDF. Use detailed=True.")
+        if self._lin_fit is None:
+            raise ValueError("Analyze the image before reporting with .analyze().")
+        fit = self._lin_fit
+        snapshot = {
+            "measured_dlg": self.measured_dlg,
+            "planned_dlg_per_leaf": self.planned_dlg_per_leaf,
+            "measured_dlg_per_leaf": self.measured_dlg_per_leaf,
+            "linear_fit": {"slope": fit.slope, "intercept": fit.intercept,
+                           "correlation": fit.rvalue, "p_value": fit.pvalue,
+                           "slope_standard_error": fit.stderr,
+                           "intercept_standard_error": fit.intercept_stderr},
+        }
+        publish_analysis_report(
+            snapshot, filename, title="Dosimetric Leaf Gap Analysis",
+            context={"Image identifier": self.image.base_path},
+            notes=notes, metadata=metadata, logo=logo, branding=branding,
+            fields={
+                ("measured_dlg",): ReportField("Measured dosimetric leaf gap (mm)", decimal_places=3),
+                ("planned_dlg_per_leaf",): ReportField("Planned leaf overlaps (mm)", decimal_places=3),
+                ("measured_dlg_per_leaf",): ReportField("Measured leaf-profile peak prominences", "Values are image-intensity measurements, not distances. Measurements remain in their recorded order."),
+                ("linear_fit",): ReportField("Linear fit measurements"),
+            },
+            plots={"Leaf-gap fit": lambda: self.plot_dlg(show=False),
+                   "Input image": lambda: self.image.plot(show=False)},
+            open_file=open_file,
+        )
 
     def plot_dlg(self, show: bool = True) -> None:
         """Plot the measured DLG values across the planned gaps"""
