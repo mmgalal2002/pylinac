@@ -6,7 +6,7 @@ import io
 import os.path as osp
 import warnings
 import webbrowser
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 from math import ceil, floor
 from pathlib import Path
@@ -1122,6 +1122,9 @@ class FieldAnalysis(ResultsDataMixin[FieldResult], QuaacMixin):
         open_file: bool = False,
         metadata: dict = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -1143,7 +1146,22 @@ class FieldAnalysis(ResultsDataMixin[FieldResult], QuaacMixin):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include all measurements and separate image and profile artifacts.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title="Field Analysis",
+                context={"Analysis variation": type(self).__name__},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                plots={"Field image and profiles": lambda: self.plot_analyzed_image(show=False, split_plots=True)},
+                open_file=open_file,
+            )
+            return
         plt.ioff()
         if not self._is_analyzed:
             raise NotAnalyzed("Image is not analyzed yet. Use analyze() first.")
