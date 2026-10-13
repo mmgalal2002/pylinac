@@ -534,11 +534,11 @@ class QuartDVT(CatPhanBase, ResultsDataMixin[QuartDVTResult]):
             .. warning:: Thickness accuracy degrades with image noise; i.e. low mAs images are less accurate.
 
         cnr_threshold : float, int
-            The threshold for "detecting" low-contrast image. See RTD for calculation info.
+            Retained for backwards compatibility; this argument is not used.
 
             .. deprecated:: 3.0
 
-                Use visibility parameter instead.
+                Quart analysis has no replacement visibility parameter.
 
         x_adjustment: float
             A fine-tuning adjustment to the detected x-coordinate of the phantom center. This will move the
