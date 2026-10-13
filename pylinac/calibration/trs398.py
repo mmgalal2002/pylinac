@@ -949,6 +949,10 @@ class TRS398Photon(TRS398Base):
         notes: list | None = None,
         open_file: bool = False,
         metadata: dict | None = None,
+        *,
+        detailed: bool = False,
+        branding: dict[str, object] | None = None,
+        logo: str | None = None,
     ):
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -964,7 +968,20 @@ class TRS398Photon(TRS398Base):
         metadata : dict
             Any data that should be appended to every page of the report. This differs from notes in that
             metadata is at the top of every page while notes is at the bottom of the report.
+        detailed : bool
+            Include complete readings, correction factors and dose result visuals.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
+        logo : str, optional
+            Local logo, used only for detailed reports.
         """
+        if detailed:
+            from ..core.reporting import publish_calibration_report
+
+            publish_calibration_report(self, filename, title="TRS-398 Photon Calibration",
+                                       notes=notes, metadata=metadata, branding=branding,
+                                       logo=logo, open_file=open_file)
+            return
         was_adjusted = "Yes" if self.output_was_adjusted else "No"
         title = f"TRS-398 Photon Report - {self.energy} MV"
         if self.fff:
@@ -1165,6 +1182,10 @@ class TRS398Electron(TRS398Base):
         notes: list | None = None,
         open_file: bool = False,
         metadata: dict | None = None,
+        *,
+        detailed: bool = False,
+        branding: dict[str, object] | None = None,
+        logo: str | None = None,
     ):
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -1180,7 +1201,20 @@ class TRS398Electron(TRS398Base):
         metadata : dict
             Any data that should be appended to every page of the report. This differs from notes in that
             metadata is at the top of every page while notes is at the bottom of the report.
+        detailed : bool
+            Include complete readings, correction factors and dose result visuals.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
+        logo : str, optional
+            Local logo, used only for detailed reports.
         """
+        if detailed:
+            from ..core.reporting import publish_calibration_report
+
+            publish_calibration_report(self, filename, title="TRS-398 Electron Calibration",
+                                       notes=notes, metadata=metadata, branding=branding,
+                                       logo=logo, open_file=open_file)
+            return
         was_adjusted = "Yes" if self.output_was_adjusted else "No"
         title = f"TRS-398 Electron Report - {self.energy} MV"
 
