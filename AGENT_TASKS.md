@@ -19,6 +19,19 @@ Use only the supplied local folder `E:\dcms-20261013T142612Z-1-001\dcms`.
 Do not download data or install dependencies. The human explicitly declined
 content checks; tests, builds, linters and screenshots remain human-owned.
 
+## Logo Customization: 2026-10-13
+
+- [x] Confirm the existing `logo=` argument reaches the shared detailed renderer,
+      including the direct Picket Fence and Winston-Lutz report paths.
+- [x] Accept a local logo in `ReportBranding` and the `branding` mapping as well.
+- [x] Keep explicit `logo=` precedence, local-file validation and existing defaults.
+- [x] Document both options and `publish.logo` for paired local review examples.
+- [x] Check shared-renderer editor diagnostics; no errors were reported.
+
+No custom-logo PDFs were generated for this revision because no custom logo was
+supplied. Visual review remains pending in [HUMAN_TASKS.md](HUMAN_TASKS.md).
+No tests, builds, linters or screenshots were run for this revision.
+
 ## Rollout Summary
 
 - 47 concrete imaging analyses have detailed-report adapters.
