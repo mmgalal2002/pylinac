@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature as _signature
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -55,8 +56,108 @@ class MaxCountRateResults(ResultBase):
     sums: dict[int, float]  #:
 
 
+class _NuclearReportMixin:
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: Path | str | None = None,
+        *,
+        detailed: bool = True,
+        branding: Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish complete nuclear medicine results and available artifacts.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Review notes.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Site and review information.
+        logo : str or Path, optional
+            Local logo.
+        detailed : bool
+            Must be True; nuclear analyses had no legacy PDF report.
+        branding : mapping, optional
+            Full identity; see :class:`~pylinac.core.reporting.ReportBranding`.
+        """
+        from .core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("This analysis has no legacy PDF. Use detailed=True.")
+        names = {
+            "MaxCountRate": "Maximum Count Rate",
+            "PlanarUniformity": "Planar Uniformity",
+            "CenterOfRotation": "Centre of Rotation",
+            "TomographicResolution": "Tomographic Resolution",
+            "SimpleSensitivity": "Camera Sensitivity",
+            "FourBarResolution": "Four-Bar Resolution",
+            "QuadrantResolution": "Quadrant Resolution",
+            "TomographicUniformity": "Tomographic Uniformity",
+            "TomographicContrast": "Tomographic Contrast",
+        }
+        title = names[type(self).__name__]
+        data = getattr(self, "results_data")()
+        labels = {
+            "max_countrate": "Maximum count rate (counts/s)",
+            "max_frame": "Frame with maximum count rate",
+            "frame_duration": "Frame duration (s)",
+            "sums": "Count rate by frame (counts/s)",
+            "phantom_cps": "Phantom count rate (counts/s)",
+            "background_cps": "Background count rate (counts/s)",
+            "half_life_s": "Radionuclide half-life (s)",
+            "duration_s": "Acquisition duration (s)",
+            "decay_correction": "Decay correction factor",
+            "sensitivity_mbq": "Sensitivity (counts/s/MBq)",
+            "sensitivity_uci": "Sensitivity (counts/min/microcurie)",
+            "ufov_integral_uniformity": "Useful field integral uniformity (%)",
+            "ufov_differential_uniformity": "Useful field differential uniformity (%)",
+            "cfov_integral_uniformity": "Central field integral uniformity (%)",
+            "cfov_differential_uniformity": "Central field differential uniformity (%)",
+            "center_border_ratio": "Centre-to-border signal ratio",
+            "uniformity_baseline": "Uniformity baseline signal",
+            "spheres": "Individual sphere contrast measurements",
+        }
+        for coordinate in ("x", "y", "z"):
+            labels[f"{coordinate}_deviation_mm"] = f"{coordinate.upper()} image-axis deviation (mm)"
+            labels[f"{coordinate}_fwhm"] = f"{coordinate.upper()} profile full width at half maximum (mm)"
+            labels[f"{coordinate}_fwtm"] = f"{coordinate.upper()} profile full width at tenth maximum (mm)"
+        fields = {(key,): ReportField(label) for key, label in labels.items()}
+        fields[("max_frame",)] = ReportField(labels["max_frame"], numbered=True)
+        for key in ("first_frame", "last_frame"):
+            fields[(key,)] = ReportField(f"{key.split('_')[0].capitalize()} analysed frame", numbered=True)
+        if isinstance(data, Mapping):
+            for frame in data:
+                for key, label in labels.items():
+                    fields[(str(frame), key)] = ReportField(label)
+            warnings = getattr(self, "get_captured_warnings", None)
+            if callable(warnings):
+                data = {**data, "warnings": warnings()}
+        plot = getattr(self, "plot", None)
+        plots = None
+        if callable(plot):
+            plots = {f"{title} analysis artifacts": (lambda: plot(show=False)) if "show" in _signature(plot).parameters else plot}
+        paths = {}
+        for key in ("path", "phantom_path", "background_path"):
+            path = getattr(self, key, None)
+            if path is not None:
+                paths[key.replace("_", " ").capitalize()] = Path(path).name
+        publish_analysis_report(
+            data, filename, title=f"{title} Analysis", context=paths,
+            notes=notes, metadata=metadata, logo=logo, branding=branding, fields=fields,
+            plots=plots, chart_fields=("sensitivity_mbq", "sensitivity_uci") if isinstance(self, SimpleSensitivity) else (),
+            open_file=open_file,
+        )
+
+
 @capture_warnings
-class MaxCountRate(ResultsDataMixin[MaxCountRateResults], QuaacMixin):
+class MaxCountRate(_NuclearReportMixin, ResultsDataMixin[MaxCountRateResults], QuaacMixin):
     """Calculate the maximum countrate of a gamma camera.
 
     Reimplementation of the NMQC toolkit's MaxCountRate test (4.2)
@@ -283,7 +384,7 @@ class FOV:
         axis.legend()
 
 
-class PlanarUniformity(QuaacMixin):
+class PlanarUniformity(_NuclearReportMixin, QuaacMixin):
     """Analyzes an image for its integral and differential uniformity."""
 
     stack: NMImageStack
@@ -518,7 +619,7 @@ class CenterOfRotationResults(ResultBase):
 
 
 @capture_warnings
-class CenterOfRotation(ResultsDataMixin[CenterOfRotationResults], QuaacMixin):
+class CenterOfRotation(_NuclearReportMixin, ResultsDataMixin[CenterOfRotationResults], QuaacMixin):
     """Analyze the center of rotation deviation of a gamma camera."""
 
     centroids: dict[float, Point]
@@ -744,7 +845,7 @@ class TomographicResolutionAxisData:
 
 
 @capture_warnings
-class TomographicResolution(ResultsDataMixin[TomographicResolutionResults], QuaacMixin):
+class TomographicResolution(_NuclearReportMixin, ResultsDataMixin[TomographicResolutionResults], QuaacMixin):
     """Analyze a tomographic resolution image for its x/y/z resolution. Based on IAEA test 4.3.4, pg 169
 
     Parameters
@@ -913,7 +1014,7 @@ class SimpleSensitivityResults(ResultBase):
 
 
 @capture_warnings
-class SimpleSensitivity(ResultsDataMixin[SimpleSensitivityResults], QuaacMixin):
+class SimpleSensitivity(_NuclearReportMixin, ResultsDataMixin[SimpleSensitivityResults], QuaacMixin):
     """The 'simple' sensitivity test as defined by IAEA 2.3.9. Equations come from the IAEA NMQC toolkit."""
 
     half_life_s: float
@@ -1122,7 +1223,7 @@ class FourBarResolutionResults(ResultBase):
 
 
 @capture_warnings
-class FourBarResolution(ResultsDataMixin[FourBarResolutionResults], QuaacMixin):
+class FourBarResolution(_NuclearReportMixin, ResultsDataMixin[FourBarResolutionResults], QuaacMixin):
     """Spatial resolution in the X and Y direction as measured by a 'four-bar' phantom.
 
     Parameters
@@ -1264,7 +1365,7 @@ class QuadrantResolutionResults(ResultBase):
 
 
 @capture_warnings
-class QuadrantResolution(ResultsDataMixin[QuadrantResolutionResults], QuaacMixin):
+class QuadrantResolution(_NuclearReportMixin, ResultsDataMixin[QuadrantResolutionResults], QuaacMixin):
     """Analyze a 4-quadrant image of high-contrast line pairs to determine MTF and FWHM.
 
     Parameters
@@ -1621,7 +1722,7 @@ class TomographicContrastResults(ResultBase):
 
 
 @capture_warnings
-class TomographicContrast(ResultsDataMixin[TomographicContrastResults], QuaacMixin):
+class TomographicContrast(_NuclearReportMixin, ResultsDataMixin[TomographicContrastResults], QuaacMixin):
     rois: dict[str, TomographicROI]
 
     def __init__(self, path: str | Path):
