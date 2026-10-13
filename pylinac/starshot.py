@@ -25,7 +25,7 @@ import copy
 import io
 import math
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import product
 from pathlib import Path
 from typing import BinaryIO
@@ -785,6 +785,9 @@ class Starshot(ResultsDataMixin[StarshotResults], QuaacMixin):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -806,7 +809,32 @@ class Starshot(ResultsDataMixin[StarshotResults], QuaacMixin):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete results, separate image views and attached JSON.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import ReportField, publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title="Starshot Analysis",
+                context={"Image identifier": self.image.base_path},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                fields={
+                    ("tolerance_mm",): ReportField("Isocentre diameter tolerance (mm)", decimal_places=3),
+                    ("circle_center_x_y", "0"): ReportField("Horizontal image position (pixels)", decimal_places=1),
+                    ("circle_center_x_y", "1"): ReportField("Vertical image position (pixels)", decimal_places=1),
+                    ("reference_point_x_y", "0"): ReportField("Horizontal image position (pixels)", decimal_places=1),
+                    ("reference_point_x_y", "1"): ReportField("Vertical image position (pixels)", decimal_places=1),
+                    ("angles",): ReportField("Radiation line angles (degrees)", decimal_places=1),
+                },
+                plots={
+                    "Full analysed starshot image": lambda: self.plot_analyzed_subimage(subimage="whole", show=False),
+                    "Fitted isocentre circle": lambda: self.plot_analyzed_subimage(subimage="wobble", show=False),
+                }, open_file=open_file,
+            )
+            return
         canvas = pdf.PylinacCanvas(
             filename, page_title="Starshot Analysis", metadata=metadata, logo=logo
         )
