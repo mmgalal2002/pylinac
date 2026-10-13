@@ -42,3 +42,17 @@ Agent work: [AGENT_TASKS.md](AGENT_TASKS.md).
 	are reviewed. Record any remaining limitations.
 
 All detailed PDF human tasks start unchecked. Only the human may complete them.
+
+## Medical Wording And Full Branding: Pilot Review
+
+- [ ] Review [docs/source/files/picket_fence_detailed_pilot.pdf](docs/source/files/picket_fence_detailed_pilot.pdf)
+	for medical-reader wording, readable measurements and image quality.
+- [ ] Confirm that central-axis coordinates describe image pixels, not patient
+	anatomy, and that no printed JSON paths or developer-style table labels remain.
+- [ ] Confirm that displayed picket numbers begin at 1 while the attached JSON
+	keeps the original identifiers and exact measurements.
+- [ ] Review [docs/source/files/picket_fence_branded_pilot.pdf](docs/source/files/picket_fence_branded_pilot.pdf)
+	for the title, fonts, colours, tables, charts, header and footer, not only the logo.
+- [ ] Approve the Picket Fence wording and brand design before applying the same
+	rules to the remaining QA reports. Report measurements and image overlays must
+	remain faithful to the original analysis.
