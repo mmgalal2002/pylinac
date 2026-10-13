@@ -3,7 +3,20 @@
 Plan: [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md).
 Human decisions: [HUMAN_TASKS.md](HUMAN_TASKS.md).
 
-Only the planning step is complete. Python implementation has not started.
+The shared renderer and Picket Fence pilot are implemented. The pilot is being
+revised for medical readers and full branding. Wider module rollout is pending.
+
+## Clinician Wording And Full Branding: Current Steps
+
+- [x] Record the new requirements in the plan for all current and future reports.
+- [ ] Replace raw JSON paths and technical table labels in the shared renderer.
+- [ ] Add plain medical wording for every Picket Fence field and nested coordinate.
+- [ ] Use clear leaf and picket labels without changing the attached measurements.
+- [ ] Add full brand controls for fonts, colours, charts, tables, titles, headers
+  and footers, alongside the existing logo option.
+- [ ] Regenerate the local pilot and record what was checked.
+- [ ] Add this requirement to the repository guide for future report adapters.
+- [ ] Prepare human wording and brand-review tasks. Do not complete human acceptance.
 
 ## Plan And Coverage
 
