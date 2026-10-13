@@ -2642,6 +2642,7 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             publish_analysis_report(
                 self.results_data(), filename, title=analysis_title,
                 context={"Phantom model": str(self._model), "Number of scan images": self.num_images},
+                scan_images=[Path(img.path).name for img in self.dicom_stack],
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
                 fields={("origin_slice",): ReportField("Reference scan image number", numbered=True)},
                 plots={names[key]: lambda key=key: self.plot_analyzed_subimage(subimage=key, show=False)
