@@ -4041,8 +4041,40 @@ class GECTQA(ResultsDataMixin[GECTQAResult], QuaacMixin):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: dict[str, object] | None = None,
     ) -> None:
-        """Publish a PDF containing structured results and analysis plots."""
+        """Publish a PDF containing structured results and analysis plots.
+
+        Parameters
+        ----------
+        filename : str or Path
+            Report destination; detailed reports also support binary streams.
+        notes : str, optional
+            Review notes.
+        open_file : bool
+            Open file destinations after publishing.
+        metadata : dict, optional
+            Site and review information.
+        logo : str or Path, optional
+            Local logo.
+        detailed : bool
+            Include all result sections, individual module artifacts and attached JSON.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
+        """
+        if detailed:
+            from .core.reporting import publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title=f"{self._model} Analysis",
+                context={"Phantom model": self._model},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                plots={"GE CT QA module images": lambda: self.plot_images(show=False)},
+                open_file=open_file,
+            )
+            return
         analysis_images = self.save_images(to_stream=True)
         report_metadata = {
             key: value
