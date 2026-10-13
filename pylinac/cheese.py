@@ -534,6 +534,7 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
             publish_analysis_report(
                 self.results_data(), filename, title=f"{self.model} Phantom Analysis",
                 context={"Phantom model": self.model, "Number of scan images": self.num_images},
+                scan_images=[Path(img.path).name for img in self.dicom_stack],
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
                 fields={("origin_slice",): ReportField("Reference scan image number", numbered=True),
                         ("phantom_roll",): ReportField("Phantom rotation (degrees)", decimal_places=1)},
