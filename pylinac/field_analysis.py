@@ -1154,6 +1154,8 @@ class FieldAnalysis(ResultsDataMixin[FieldResult], QuaacMixin):
         if detailed:
             from .core.reporting import publish_analysis_report
 
+            if self._from_device:
+                raise ValueError("Detailed reports in this rollout support image-based FieldAnalysis only, not device measurements.")
             publish_analysis_report(
                 self.results_data(), filename, title="Field Analysis",
                 context={"Analysis variation": type(self).__name__},
