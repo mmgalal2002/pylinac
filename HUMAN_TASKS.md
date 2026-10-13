@@ -36,6 +36,23 @@ for those workflows were not replaced.
 - [ ] Confirm the selected logo appears on every page without distortion,
       unwanted backgrounds or overlap with the header and report content.
 
+## ARTBackend Deployment And Review
+
+- [ ] Manually deploy this custom pylinac into the backend's runtime environment
+      after installing requirements, then restart the backend. The current editor
+      interpreter still has stock pylinac rather than the detailed renderer.
+- [ ] Review the Pro-ART identity, existing logo, teal tables, blue charts,
+      analysis titles, headers and footers using approved real imaging inputs.
+- [ ] Exercise the fourteen updated imaging services and compare their PDF
+      attachments, measurements, JSON results and API payloads with approved data.
+- [ ] Review the retained synthetic Picket Fence example separately; do not treat
+      the automated synthetic smoke check as clinical or visual acceptance.
+- [ ] Review the pre-existing Picket Fence failure when `crop_mm` is omitted.
+      The integration smoke check used `crop_mm=0`; the analysis defaults were not
+      changed as part of this PDF replacement.
+- [ ] Run the unavailable `prek` quality gate and accept the backend integration
+      only after the required clinical, visual and deployment checks.
+
 ## Imaging Report Review
 
 The implementation/example status of every class is in
