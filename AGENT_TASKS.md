@@ -67,8 +67,12 @@ revised for medical readers and full branding. Wider module rollout is pending.
 - [x] Render a branding example with custom title, fonts, colours, header and footer.
 - [x] Check editor diagnostics for the new renderer and Picket Fence changes.
 - [ ] Check the rendered text with a PDF parser; none is currently installed.
-- [ ] Complete repository formatting and documentation build gates when approved
-  tools are available. Do not install packages without human approval.
+- [x] Run the installed, cached `prek` hooks and accept formatting fixes. Python
+  syntax, Ruff, whitespace, line endings and RST content checks passed.
+- [ ] Clear the branch-policy gate on an approved working branch. The current
+  `master` branch is blocked by `no-commit-to-branch`; no branch was changed.
+- [ ] Build the documentation when Nox and Sphinx are available. They are not
+  installed in the current environment. Do not install without human approval.
 - [ ] Complete regression checks and clinical acceptance with the human.
 
 The existing `save_histogram` type-annotation diagnostic is unchanged. No regression
