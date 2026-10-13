@@ -1,3 +1,4 @@
+import warnings
 from unittest import TestCase
 
 import numpy as np
@@ -7,6 +8,19 @@ from pylinac.core.roi import DiskROI, LowContrastDiskROI, RectangleROI
 
 
 class TestDiskROI(TestCase):
+    def test_legacy_constants_preserve_values_and_warnings(self):
+        disk = LowContrastDiskROI(
+            np.arange(100).reshape(10, 10),
+            radius=2,
+            center=Point(5, 5),
+            contrast_reference=35,
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self.assertEqual(disk.cnr_constant, disk.contrast_to_noise * disk.diameter)
+            self.assertEqual(disk.contrast_constant, disk.contrast * disk.diameter)
+        self.assertEqual(caught, [])
+
     def test_array_size(self):
         disk = LowContrastDiskROI(
             np.ones((500, 500)),
