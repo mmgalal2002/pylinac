@@ -24,7 +24,7 @@ import math
 import warnings
 import webbrowser
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -655,6 +655,9 @@ class VMATBase(ABC, ResultsDataMixin[VMATResult], QuaacMixin):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -676,7 +679,39 @@ class VMATBase(ABC, ResultsDataMixin[VMATResult], QuaacMixin):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include all segment results and separate input-image and profile pages.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import ReportField, publish_analysis_report
+
+            fields = {
+                ("test_type",): ReportField("VMAT test variation"),
+                ("tolerance_percent",): ReportField("Segment deviation tolerance (%)", decimal_places=2),
+                ("segment_data",): ReportField("Individual segment measurements"),
+                ("named_segment_data",): ReportField("Measurements identified by segment"),
+                ("collimator_data",): ReportField("Collimator angle measurements"),
+                ("rotation_offset_deg",): ReportField("Collimator rotation offset (degrees)", decimal_places=1),
+            }
+            for prefix in (("segment_data", "*"), ("named_segment_data", "*")):
+                fields[prefix + ("x_position_mm",)] = ReportField("Segment distance from the central axis (mm)", decimal_places=2)
+                fields[prefix + ("angular_position_deg",)] = ReportField("Segment angle (degrees)", decimal_places=1)
+                fields[prefix + ("center_x_y",)] = ReportField("Segment centre in image pixels", decimal_places=1)
+            fields[("collimator_data", "*", "angle_deviation")] = ReportField("Collimator angle deviation (degrees)", decimal_places=1)
+            publish_analysis_report(
+                self.results_data(), filename, title=f"{self._result_short_header} VMAT Analysis",
+                context={"Open-field image": self.open_image.base_path,
+                         "Delivery image": self.dmlc_image.base_path},
+                notes=notes, metadata=metadata, logo=logo, branding=branding, fields=fields,
+                plots={
+                    f"Open-field image: {self.open_image.base_path}": lambda: self._plot_analyzed_subimage(ImageType.OPEN, show=False),
+                    f"Delivery image: {self.dmlc_image.base_path}": lambda: self._plot_analyzed_subimage(ImageType.DMLC, show=False),
+                    "Median intensity profiles": lambda: self._plot_analyzed_subimage(ImageType.PROFILE, show=False),
+                }, open_file=open_file,
+            )
+            return
         canvas = PylinacCanvas(
             filename=filename,
             page_title=f"{self._result_short_header} VMAT Analysis",
