@@ -130,6 +130,26 @@ Load -> Analyze -> Results / Visualize
 - Documentation should be thorough. More is better.
 - Cross-reference related modules and classes in docstrings.
 
+## Detailed PDF Reports
+
+- Reports are for medical physicists and clinicians, not software developers.
+- The shared renderer is [pylinac/core/reporting.py](pylinac/core/reporting.py).
+  Use `DetailedReport`, `ReportField`, `ReportTableLabels` and `ReportBranding`
+  when adding detailed-report adapters.
+- Supply clinically reviewed labels, units and short explanations. Do not print
+  JSON paths, raw field keys, Python types or programming-oriented table headings.
+- Describe image coordinates as image coordinates. Never infer patient anatomy
+  or physical units from an `x`, `y` or `z` field alone.
+- Use readable measurement numbering in the PDF. Preserve original identifiers,
+  field names and numeric precision in the attached JSON.
+- Apply the report brand to typography, colours, tables, charts, titles, headers
+  and footers as well as the logo. Keep the analysis image and its overlays faithful.
+- Keep detailed reports opt-in. Existing default PDF behaviour must not change.
+- Track agent work in [AGENT_TASKS.md](AGENT_TASKS.md) and human review in
+  [HUMAN_TASKS.md](HUMAN_TASKS.md). Never complete human acceptance for them.
+- The Picket Fence pilot needs human wording, layout and brand review before
+  wider rollout. Follow [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md).
+
 ## Maintenance Protocol
 
 Update this file whenever:
