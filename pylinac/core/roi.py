@@ -329,10 +329,10 @@ class LowContrastDiskROI(DiskROI):
 
     @property
     def cnr_constant(self) -> float:
-        """The contrast-to-noise value times the bubble diameter."""
-        DeprecationWarning(
-            "The 'cnr_constant' property will be deprecated in a future release. Use .visibility instead."
-        )
+        """The contrast-to-noise value times the bubble diameter.
+
+        Planned for deprecation. Use :attr:`visibility` for new analyses.
+        """
         return self.contrast_to_noise * self.diameter
 
     @property
@@ -350,10 +350,10 @@ class LowContrastDiskROI(DiskROI):
 
     @property
     def contrast_constant(self) -> float:
-        """The contrast value times the bubble diameter."""
-        DeprecationWarning(
-            "The 'contrast_constant' property will be deprecated in a future release. Use .visibility instead."
-        )
+        """The contrast value times the bubble diameter.
+
+        Planned for deprecation. Use :attr:`visibility` for new analyses.
+        """
         return self.contrast * self.diameter
 
     @property
