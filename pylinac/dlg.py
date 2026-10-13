@@ -134,6 +134,13 @@ class DLG:
                            "slope_standard_error": fit.stderr,
                            "intercept_standard_error": fit.intercept_stderr},
         }
+
+        def plot_gap() -> None:
+            self.plot_dlg(show=False)
+            axes = plt.gca()
+            axes.set_xlabel("Planned leaf overlap (mm)")
+            axes.set_ylabel("Leaf-profile peak prominence (image intensity)")
+
         publish_analysis_report(
             snapshot, filename, title="Dosimetric Leaf Gap Analysis",
             context={"Image identifier": self.image.base_path},
@@ -144,7 +151,7 @@ class DLG:
                 ("measured_dlg_per_leaf",): ReportField("Measured leaf-profile peak prominences", "Values are image-intensity measurements, not distances. Measurements remain in their recorded order."),
                 ("linear_fit",): ReportField("Linear fit measurements"),
             },
-            plots={"Leaf-gap fit": lambda: self.plot_dlg(show=False),
+            plots={"Leaf-gap fit": plot_gap,
                    "Input image": lambda: self.image.plot(show=False)},
             open_file=open_file,
         )
