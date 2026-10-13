@@ -1,10 +1,14 @@
 import json
+import warnings
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 from matplotlib import pyplot as plt
 
+from pylinac import nuclear
 from pylinac.nuclear import (
     CenterOfRotation,
     CenterOfRotationResults,
@@ -71,6 +75,66 @@ class TestMaxCountRate(QuaacTestBase, TestCase):
 
 
 class TestPlanarUniformityUtils(TestCase):
+    def test_morphology_size_limits_preserve_masks_and_in_place_behavior(self):
+        sparse = np.array(
+            [
+                [1, 0, 0, 0, 1],
+                [0, 0, 1, 1, 0],
+                [0, 0, 0, 0, 0],
+                [0, 1, 0, 1, 1],
+                [0, 0, 0, 0, 0],
+            ],
+            dtype=bool,
+        )
+        masks = [np.zeros((5, 5), dtype=bool), np.ones((5, 5), dtype=bool)]
+        masks.extend([sparse, ~sparse])
+        functions = [
+            (nuclear.remove_small_objects, "min_size", nuclear._SMALL_OBJECTS_KWARGS),
+            (nuclear.remove_small_holes, "area_threshold", nuclear._SMALL_HOLES_KWARGS),
+        ]
+        for function, old_argument, kwargs in functions:
+            for mask in masks:
+                with self.subTest(function=function.__name__, mask=mask.tolist()):
+                    expected = mask.copy()
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", FutureWarning)
+                        function(expected, out=expected, **{old_argument: 2})
+                    actual = mask.copy()
+                    with warnings.catch_warnings(record=True) as caught:
+                        warnings.simplefilter("always")
+                        result = function(actual, out=actual, **kwargs)
+                    np.testing.assert_array_equal(actual, expected)
+                    self.assertIs(result, actual)
+                    self.assertFalse(
+                        any(
+                            issubclass(warning.category, FutureWarning)
+                            for warning in caught
+                        )
+                    )
+
+    def test_preprocess_preserves_values_binning_and_input(self):
+        array = np.random.default_rng(123).uniform(0, 200, size=(64, 96))
+        original = array.copy()
+        for pixel_size in (2, 4.1, 4.9):
+            with self.subTest(pixel_size=pixel_size):
+                frame = SimpleNamespace(
+                    array=array,
+                    metadata=SimpleNamespace(PixelSpacing=[pixel_size, pixel_size]),
+                )
+                with (
+                    patch("pylinac.nuclear._SMALL_OBJECTS_KWARGS", {"min_size": 2}),
+                    patch("pylinac.nuclear._SMALL_HOLES_KWARGS", {"area_threshold": 2}),
+                    warnings.catch_warnings(),
+                ):
+                    warnings.simplefilter("ignore", FutureWarning)
+                    expected, expected_binning = PlanarUniformity.preprocess(
+                        frame, 0.75
+                    )
+                actual, binning = PlanarUniformity.preprocess(frame, 0.75)
+                np.testing.assert_array_equal(actual, expected)
+                np.testing.assert_array_equal(array, original)
+                self.assertEqual(binning, expected_binning)
+
     def test_binning(self):
         binning = determine_binning(2)
         self.assertEqual(binning, 4)
