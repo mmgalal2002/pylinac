@@ -6,8 +6,9 @@ Add a complete, clear PDF report for every supported QA test and its variations.
 Show all structured results as readable report sections, with useful charts and
 the analysis artifacts. Keep the current PDF option unchanged.
 
-Implementation has started with the Picket Fence pilot. No new PDF dependency
-has been installed. Human visual and clinical acceptance is still pending.
+The Picket Fence pilot is implemented, human-tested and human-approved as confirmed
+on 2026-10-13. The human authorized the full rollout. No new PDF dependency has
+been installed. Other reports and additional variations still require review.
 
 ## Required Audience And Branding
 
@@ -32,9 +33,10 @@ These rules apply to the Picket Fence pilot and every future detailed report.
 2. [x] Add shared human label handling for nested results and measurement tables.
 3. [x] Apply clinical labels, units and explanations to the Picket Fence report.
 4. [x] Add a reusable brand configuration and use it on report text, tables,
-   charts, page backgrounds, headers and footers. Preserve the original image artifact.
+       charts, page backgrounds, headers and footers. Preserve the original image artifact.
 5. [x] Regenerate the Picket Fence pilot with the updated wording and branding.
-6. [ ] Leave visual review and clinical acceptance to the human before wider rollout.
+6. [x] Receive human approval of the Picket Fence pilot before wider rollout
+       (confirmed 2026-10-13). Keep other reports' acceptance separate.
 
 Current examples:
 
@@ -44,7 +46,33 @@ Current examples:
 Both examples were rendered from the local documentation image without installing
 packages or using cloud data. Editor diagnostics found no new renderer errors.
 Automated PDF text extraction was not run because a PDF parser is not installed.
-Visual layout, wording and clinical acceptance still need human review.
+The human approved the Picket Fence pilot on 2026-10-13. This approval does not
+replace review of other reports or of additional Picket Fence variations.
+
+## Display Precision
+
+Round printed numbers for medical readers, not the stored analysis data.
+
+| Measurement                                        | Printed precision                                           |
+| -------------------------------------------------- | ----------------------------------------------------------- |
+| Leaf-position errors and tolerances                | 3 decimal places in mm                                      |
+| Leaf positions, picket offsets, spacing and widths | 2 decimal places in mm                                      |
+| Percentages                                        | 1 decimal place                                             |
+| Angles                                             | 1 decimal place in degrees                                  |
+| Image coordinates                                  | 1 decimal place in pixels                                   |
+| Counts and measurement identifiers                 | Whole numbers                                               |
+| Other floating-point measurements                  | 2 decimal places unless the adapter sets a better precision |
+
+- [x] Add per-field precision that also applies to nested measurements.
+- [x] Apply the same precision to tables, chart axes and tolerance labels.
+- [x] Remove negative zero from rounded output.
+- [x] Keep the original JSON and pass/fail calculations at full precision.
+- [x] Regenerate the standard and branded Picket Fence examples.
+- [ ] Have the human confirm the display precision, especially near tolerances.
+
+Histogram intervals may use a few extra decimals when needed to keep neighbouring
+bounds distinct. Every future report adapter must choose sensible precision for
+its own clinical units rather than print long floating-point values.
 
 ## Simple API
 
