@@ -24,7 +24,7 @@ import textwrap
 import warnings
 import webbrowser
 import zipfile
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from functools import cached_property
 from io import BytesIO
 from os import path as osp
@@ -2591,6 +2591,9 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -2612,6 +2615,10 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete results and separate module-image and measurement plots.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
         analysis_title = f"CatPhan {self._model} Analysis"
         module_images = [("hu", "lin")]
@@ -2623,6 +2630,25 @@ class CatPhanBase(ResultsDataMixin[CatphanResult], QuaacMixin):
             module_images.append(("lc", None))
         module_images.append(("side", None))
 
+        if detailed:
+            from .core.reporting import ReportField, publish_analysis_report
+
+            names = {
+                "hu": "CT number and slice geometry image", "lin": "CT number linearity",
+                "sp": "Spatial resolution image", "mtf": "Modulation transfer function",
+                "un": "Uniformity image", "prof": "Uniformity profiles",
+                "lc": "Low-contrast image", "side": "Scan overview and module locations",
+            }
+            publish_analysis_report(
+                self.results_data(), filename, title=analysis_title,
+                context={"Phantom model": str(self._model), "Number of scan images": self.num_images},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                fields={("origin_slice",): ReportField("Reference scan image number", numbered=True)},
+                plots={names[key]: lambda key=key: self.plot_analyzed_subimage(subimage=key, show=False)
+                       for pair in module_images for key in pair if key is not None},
+                open_file=open_file,
+            )
+            return
         self._publish_pdf(
             filename,
             metadata,
