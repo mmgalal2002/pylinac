@@ -28,7 +28,7 @@ import math
 import os.path as osp
 import warnings
 import webbrowser
-from collections.abc import Callable, Generator, Iterator, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from functools import cached_property
 from numbers import Real
 from pathlib import Path
@@ -1052,6 +1052,9 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -1073,7 +1076,14 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete region measurements, separate artifacts and attached JSON.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            self._publish_detailed_pdf(filename, notes, open_file, metadata, logo, branding)
+            return
         canvas = pdf.PylinacCanvas(
             filename,
             page_title=f"{self.common_name} Phantom Analysis",
@@ -1114,6 +1124,37 @@ class ImagePhantomBase(ResultsDataMixin[PlanarResult], QuaacMixin):
         canvas.finish()
         if open_file:
             webbrowser.open(filename)
+
+    def _publish_detailed_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None,
+        open_file: bool,
+        metadata: dict | None,
+        logo: Path | str | None,
+        branding: Mapping[str, object] | None,
+    ) -> None:
+        from .core.reporting import ReportField, ReportTableLabels, publish_analysis_report
+
+        fields = {
+            ("analysis_type",): ReportField("Phantom model"),
+            ("phantom_center_x_y",): ReportField("Phantom centre in image pixels", decimal_places=1),
+            ("phantom_center_x_y", "0"): ReportField("Horizontal image position (pixels)", decimal_places=1),
+            ("phantom_center_x_y", "1"): ReportField("Vertical image position (pixels)", decimal_places=1),
+            ("low_contrast_rois",): ReportField("Individual low-contrast measurements"),
+            ("mtf_lp_mm",): ReportField("Spatial resolution at recorded MTF levels (line pairs/mm)", decimal_places=3),
+            ("percent_integral_uniformity",): ReportField("Integral image uniformity (%)", decimal_places=1),
+        }
+        mammography = isinstance(self, ACRDigitalMammography)
+        publish_analysis_report(
+            self.results_data(), filename, title=f"{self.common_name} Phantom Analysis",
+            context={"Phantom model": self.common_name, "Image identifier": self.image.base_path},
+            notes=notes, metadata=metadata, logo=logo, branding=branding, fields=fields,
+            table_labels={"low_contrast_rois": ReportTableLabels(series_heading="Region")},
+            plots=None if mammography else {"Phantom image and measurements": lambda: self.plot_analyzed_image(show=False, split_plots=True)},
+            artifact_streams=(lambda: self.save_analyzed_image(to_stream=True)) if mammography else None,
+            open_file=open_file,
+        )
 
     @property
     def phantom_center(self) -> Point:
@@ -1781,6 +1822,9 @@ class StandardImagingFC2(ImagePhantomBase):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -1802,7 +1846,14 @@ class StandardImagingFC2(ImagePhantomBase):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include all light/radiation field measurements and image artifacts.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            self._publish_detailed_pdf(filename, notes, open_file, metadata, logo, branding)
+            return
         canvas = pdf.PylinacCanvas(
             filename,
             page_title=f"{self.common_name} Phantom Analysis",
@@ -5050,6 +5101,9 @@ class ACRDigitalMammography(ImagePhantomBase):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ):
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -5071,7 +5125,14 @@ class ACRDigitalMammography(ImagePhantomBase):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include complete mass, speck and fibre results and individual detail views.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            self._publish_detailed_pdf(filename, notes, open_file, metadata, logo, branding)
+            return
         canvas = pdf.PylinacCanvas(
             filename,
             page_title=f"{self.common_name} Phantom Analysis",
