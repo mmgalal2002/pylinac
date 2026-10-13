@@ -496,6 +496,9 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
         open_file: bool = False,
         metadata: dict | None = None,
         logo: Path | str | None = None,
+        *,
+        detailed: bool = False,
+        branding: dict[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis and quantitative results.
 
@@ -517,7 +520,26 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
             --------------
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
+        detailed : bool
+            Include every region result, the analysed image and available density curve.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import ReportField, publish_analysis_report
+
+            plots = {"Analysed phantom image": lambda: self.plot_analyzed_image(show=False)}
+            if self.roi_config:
+                plots["Density and CT number curve"] = lambda: self.plot_density_curve(show=False)
+            publish_analysis_report(
+                self.results_data(), filename, title=f"{self.model} Phantom Analysis",
+                context={"Phantom model": self.model, "Number of scan images": self.num_images},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                fields={("origin_slice",): ReportField("Reference scan image number", numbered=True),
+                        ("phantom_roll",): ReportField("Phantom rotation (degrees)", decimal_places=1)},
+                plots=plots, open_file=open_file,
+            )
+            return
         canvas = pdf.PylinacCanvas(
             filename,
             page_title=f"{self.model} Phantom",
