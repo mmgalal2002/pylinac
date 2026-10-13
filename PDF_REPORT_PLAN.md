@@ -6,7 +6,34 @@ Add a complete, clear PDF report for every supported QA test and its variations.
 Show all structured results as readable report sections, with useful charts and
 the analysis artifacts. Keep the current PDF option unchanged.
 
-This step creates the plan only. It does not change Python code or install packages.
+Implementation has started with the Picket Fence pilot. No new PDF dependency
+has been installed. Human visual and clinical acceptance is still pending.
+
+## Required Audience And Branding
+
+These rules apply to the Picket Fence pilot and every future detailed report.
+
+- [x] Record that reports are for medical physicists and clinicians, not developers.
+- [ ] Use clinical measurement names and short explanations throughout the report.
+- [ ] Replace visible JSON paths, field keys and programming terms with human labels.
+  For example, central-axis `x` becomes "Horizontal image position (pixels)" in
+  Picket Fence. Do not confuse image coordinates with patient anatomy.
+- [ ] Use readable measurement numbering while preserving original data in the attachment.
+- [ ] Keep complete data and exact field identities in the attached JSON, not in
+  developer-facing table headings.
+- [ ] Apply full Pylinac branding to typography, page furniture, colours, tables,
+  charts, titles, headers and footers. A logo alone is not enough.
+- [ ] Allow a custom report brand without changing analysis values or the old PDF.
+- [ ] Require every new analysis adapter to follow these audience and branding rules.
+
+## Current Revision Steps
+
+1. [x] Record the clinician-facing wording and full-branding requirements.
+2. [ ] Add shared human label handling for nested results and measurement tables.
+3. [ ] Apply clinical labels, units and explanations to the Picket Fence report.
+4. [ ] Add a reusable brand configuration and use it on every report element.
+5. [ ] Regenerate the Picket Fence pilot with the updated wording and branding.
+6. [ ] Leave visual review and clinical acceptance to the human before wider rollout.
 
 ## Simple API
 
@@ -32,8 +59,9 @@ analysis.publish_pdf("detailed_report.pdf", detailed=True)
   provides a valid status. Use "Not evaluated" when it does not.
 - [ ] Show every JSON field, including nested objects, lists, per-image results,
   per-leaf results and optional fields. Do not silently drop unknown fields.
-- [ ] Use clear field names, units, table headers and descriptions from the result
-  model and module definitions. Keep the original JSON field path for traceability.
+- [ ] Use clinically reviewed field names, units, table headers and explanations.
+  Keep original field identities in the attached JSON for traceability, not as
+  printed JSON paths.
 - [ ] Keep full numeric precision in the attached JSON. Use consistent display
   precision in the report. Never invent units, tolerances or missing values.
 - [ ] Include all long tables and arrays in a readable appendix with repeated
