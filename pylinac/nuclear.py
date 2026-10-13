@@ -5,6 +5,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
+from inspect import signature as _signature
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +35,17 @@ from pylinac.core.roi import DiskROI, HighContrastDiskROI, RectangleROI
 from pylinac.core.utilities import QuaacDatum, QuaacMixin, ResultBase, ResultsDataMixin
 from pylinac.core.warnings import capture_warnings
 from pylinac.metrics.image import WeightedCentroid
+
+_SMALL_OBJECTS_KWARGS = (
+    {"max_size": 2}
+    if "max_size" in _signature(remove_small_objects).parameters
+    else {"min_size": 2}
+)
+_SMALL_HOLES_KWARGS = (
+    {"max_size": 2}
+    if "max_size" in _signature(remove_small_holes).parameters
+    else {"area_threshold": 2}
+)
 
 
 class MaxCountRateResults(ResultBase):
@@ -448,8 +460,8 @@ class PlanarUniformity(QuaacMixin):
         array[array < threshold] = 0
         # remove stray pixels
         binary_frame = array > 0
-        remove_small_objects(binary_frame, min_size=2, out=binary_frame)
-        remove_small_holes(binary_frame, area_threshold=2, out=binary_frame)
+        remove_small_objects(binary_frame, out=binary_frame, **_SMALL_OBJECTS_KWARGS)
+        remove_small_holes(binary_frame, out=binary_frame, **_SMALL_HOLES_KWARGS)
         array[binary_frame == 0] = 0
         return array, bin_size
 
