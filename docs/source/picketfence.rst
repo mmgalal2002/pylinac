@@ -370,6 +370,54 @@ in addition to the algorithm allowances and restrictions:
 Tips & Tricks
 -------------
 
+Detailed medical physics reports
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+After analysis, use ``detailed=True`` for a paginated report with a summary,
+an analysed image, separate charts and complete measurement tables:
+
+.. code-block:: python
+
+  pf.publish_pdf("picket_fence_report.pdf", detailed=True)
+
+The report uses medical measurement names rather than JSON field paths. For
+example, central-axis coordinates are labelled as horizontal image position,
+vertical image position and depth coordinate in pixels. These are image
+coordinates, not patient anatomical coordinates; a planar image does not measure
+depth. Displayed picket numbers start at 1. The attached ``results.json`` keeps
+the original identifiers and full numeric precision.
+
+Pylinac branding is applied to the whole report. To customise the title, fonts,
+colours and page wording, pass a ``branding`` mapping:
+
+.. code-block:: python
+
+  pf.publish_pdf(
+      "picket_fence_report.pdf",
+      detailed=True,
+      branding={
+          "name": "Pylinac",
+          "report_title": "Pylinac Multileaf Collimator QA Report",
+          "header_text": "Radiotherapy machine quality assurance",
+          "footer_text": "Pylinac | Medical Physics",
+          "primary_color": "#176547",
+          "chart_color": "#24AE61",
+          "body_font": "Times-Roman",
+          "heading_font": "Times-Bold",
+      },
+  )
+
+See :class:`~pylinac.core.reporting.ReportBranding` for all supported settings.
+The existing ``logo`` argument accepts a local custom logo. For additional font
+families, register the fonts with ReportLab before publishing. Unknown branding
+keys and unavailable fonts raise an error instead of being silently ignored.
+
+The detailed report can be generated offline after the image is loaded and
+analysed. It is currently a Picket Fence pilot. Visual and clinical review are
+still required before wider rollout. Omitting ``detailed`` or using
+``detailed=False`` keeps the existing PDF layout; branding does not affect that
+legacy option.
+
 Use ``results_data``
 ^^^^^^^^^^^^^^^^^^^^
 
