@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import io
 import webbrowser
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
@@ -375,6 +375,9 @@ class FieldProfileAnalysis(ResultsDataMixin[FieldProfileResult]):
         metadata: dict = None,
         logo: Path | str | None = None,
         plot_kwargs: dict | None = None,
+        *,
+        detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -398,7 +401,28 @@ class FieldProfileAnalysis(ResultsDataMixin[FieldProfileResult]):
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
         plot_kwargs : dict
             Additional keyword arguments to pass to the plot_analyzed_image method. E.g. ``show_grid=False``.
+        detailed : bool
+            Include every metric and profile sample, plus separate plot pages.
+        branding : mapping, optional
+            Full report identity, used only for detailed reports.
         """
+        if detailed:
+            from .core.reporting import ReportField, publish_analysis_report
+
+            publish_analysis_report(
+                self.results_data(), filename, title="Field Profile Analysis",
+                context={"Image identifier": self.image.base_path},
+                notes=notes, metadata=metadata, logo=logo, branding=branding,
+                fields={
+                    ("x_metrics",): ReportField("Horizontal profile measurements"),
+                    ("y_metrics",): ReportField("Vertical profile measurements"),
+                    ("x_metrics", "values"): ReportField("Recorded horizontal profile samples"),
+                    ("y_metrics", "values"): ReportField("Recorded vertical profile samples"),
+                },
+                plots={"Field profiles and sampling image": lambda: self.plot_analyzed_images(show=False, **(plot_kwargs or {}))},
+                open_file=open_file,
+            )
+            return
         plt.ioff()
         if not self._is_analyzed:
             raise NotAnalyzed("Image is not analyzed yet. Use analyze() first.")
