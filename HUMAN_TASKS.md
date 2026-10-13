@@ -28,6 +28,14 @@ Nuclear medicine, machine logs, calibration and non-image device workflows are
 excluded. The agent removed its earlier out-of-scope additions. Existing methods
 for those workflows were not replaced.
 
+## Custom Logo Review: 2026-10-13
+
+- [ ] Review detailed PDFs with an approved local logo using the existing `logo=`
+      argument and the new `branding.logo` option. Confirm `logo=` wins when both
+      are supplied.
+- [ ] Confirm the selected logo appears on every page without distortion,
+      unwanted backgrounds or overlap with the header and report content.
+
 ## Imaging Report Review
 
 The implementation/example status of every class is in
