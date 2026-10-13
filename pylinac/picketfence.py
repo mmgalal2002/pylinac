@@ -22,7 +22,7 @@ import os.path as osp
 import statistics
 import warnings
 import webbrowser
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import cached_property
 from io import BytesIO
 from itertools import cycle, groupby
@@ -1552,6 +1552,7 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
         logo: Path | str | None = None,
         *,
         detailed: bool = False,
+        branding: Mapping[str, object] | None = None,
     ) -> None:
         """Publish (print) a PDF containing the analysis, images, and quantitative results.
 
@@ -1579,9 +1580,14 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             If True, use the detailed, paginated report with complete structured
             results and separate analysis artifacts. The default preserves the
             existing PDF layout.
+        branding : mapping, optional
+            Full branding settings for detailed reports, including report owner,
+            title, header, footer, fonts and colours. See
+            :class:`~pylinac.core.reporting.ReportBranding` for the supported keys.
+            This does not change the legacy report when ``detailed=False``.
         """
         if detailed:
-            self._publish_detailed_pdf(filename, notes, metadata, bins, logo)
+            self._publish_detailed_pdf(filename, notes, metadata, bins, logo, branding)
             if open_file:
                 webbrowser.open(filename)
             return
@@ -1616,10 +1622,11 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
         metadata: dict | None,
         bins: int,
         logo: Path | str | None,
+        branding: Mapping[str, object] | None,
     ) -> None:
         from matplotlib.figure import Figure
 
-        from .core.reporting import DetailedReport
+        from .core.reporting import DetailedReport, ReportField, ReportTableLabels
 
         if not self._is_analyzed:
             raise RuntimeError("The image must be analyzed first. Use .analyze().")
@@ -1631,22 +1638,73 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             ),
             "Custom MLC arrangement",
         )
+        data = self.results_data()
+        leaf_labels = {}
+        for leaf in data.mlc_errors_by_leaf:
+            if len(leaf) > 1 and leaf[0] in ("A", "B") and leaf[1:].isdigit():
+                leaf_labels[leaf] = f"Bank {leaf[0]}, leaf {leaf[1:]}"
+            else:
+                leaf_labels[leaf] = f"Leaf pair {leaf}" if not self.separate_leaves else f"Leaf {leaf}"
+        picket_labels = {
+            f"picket_{index}": f"Picket {index + 1}"
+            for index in range(data.number_of_pickets)
+        }
+        orientation_label = (
+            "Vertical pickets" if self.orientation == Orientation.UP_DOWN else "Horizontal pickets"
+        )
+        fields = {
+            ("tolerance_mm",): ReportField("Leaf-position tolerance (mm)", "Maximum permitted distance between a measured leaf position and its reference picket."),
+            ("action_tolerance_mm",): ReportField("Action tolerance (mm)", "Optional action threshold supplied for this analysis.", missing_label="Not set"),
+            ("percent_leaves_passing",): ReportField("Leaves within tolerance (%)", "Percentage of analysed leaves that meet the selected position tolerance."),
+            ("number_of_pickets",): ReportField("Number of measured pickets"),
+            ("absolute_median_error_mm",): ReportField("Median absolute leaf-position error (mm)", "Median positioning error across all measured leaves, ignoring the direction of the error."),
+            ("max_error_mm",): ReportField("Largest leaf-position error (mm)", "Largest absolute positioning error in the measured leaf positions."),
+            ("max_error_picket",): ReportField("Picket with the largest error", "Pickets are numbered from 1 in this report, starting with the leftmost or uppermost picket.", numbered=True),
+            ("max_error_leaf",): ReportField("Leaf with the largest error", "Leaf or leaf-pair identifier with the largest measured positioning error."),
+            ("mean_picket_spacing_mm",): ReportField("Average distance between pickets (mm)"),
+            ("offsets_from_cax_mm",): ReportField("Picket positions relative to the central axis (mm)", "Distance of each picket from the central axis. Positive values follow the analysis convention, to the left."),
+            ("passed",): ReportField("Overall test result", "The result is within tolerance only when all analysed leaf positions meet the selected tolerance."),
+            ("failed_leaves",): ReportField("Leaves outside tolerance", "Identifiers of the leaves or leaf pairs that did not meet the position tolerance."),
+            ("mlc_skew",): ReportField("Multileaf collimator rotation (degrees)", "Rotation of the leaf pattern relative to the nearest horizontal or vertical image direction."),
+            ("picket_widths",): ReportField("Measured picket widths", "Minimum, maximum, average and median widths are reported in millimetres for each picket."),
+            ("mlc_positions_by_leaf",): ReportField("Leaf positions relative to the central axis (mm)", "Measured leaf positions in recorded order. Distances are in millimetres from the central axis, with positive values to the left."),
+            ("mlc_errors_by_leaf",): ReportField("Leaf-position errors (mm)", "Signed distance between each measured leaf position and its reference picket. Measurements remain in their recorded order."),
+            ("cax",): ReportField("Central axis location", "Coordinates are measured in image pixels, not patient anatomy. The depth coordinate is retained as recorded; a planar image does not measure depth."),
+            ("cax", "x"): ReportField("Horizontal image position (pixels)"),
+            ("cax", "y"): ReportField("Vertical image position (pixels)"),
+            ("cax", "z"): ReportField("Depth coordinate (pixels)"),
+            ("warnings",): ReportField("Analysis warnings", "Warnings recorded during image measurement. Review these before accepting the result."),
+        }
         report = DetailedReport(
             title="Picket Fence Analysis",
-            results=self.results_data(),
+            results=data,
             context={
-                "Analysis class": type(self).__name__,
-                "Input artifact": Path(self.image.path).name or "In-memory image",
-                "Orientation": self.orientation.value,
-                "MLC model": mlc_name,
+                "Quality assurance test": "Multileaf collimator positioning (Picket Fence)",
+                "Image identifier": Path(self.image.path).name or "Image supplied without a file name",
+                "Picket orientation": orientation_label,
+                "Multileaf collimator model": mlc_name,
                 "Leaf mode": "Individual bank leaves" if self.separate_leaves else "Leaf pairs",
-                "Reference": "Delivery log" if self._log_fits is not None else "Image-fitted pickets",
+                "Position reference": "Delivery log" if self._log_fits is not None else "Reference lines fitted to the image",
                 "Gantry angle (degrees)": self.image.gantry_angle,
                 "Collimator angle (degrees)": self.image.collimator_angle,
             },
             metadata=metadata,
             notes=notes,
             logo=logo,
+            branding=branding,
+            fields=fields,
+            table_labels={
+                "mlc_positions_by_leaf": ReportTableLabels(row_heading="Leaf", row_labels=leaf_labels),
+                "mlc_errors_by_leaf": ReportTableLabels(row_heading="Leaf", row_labels=leaf_labels),
+                "picket_widths": ReportTableLabels(
+                    row_heading="Picket",
+                    row_labels=picket_labels,
+                    column_labels={"min": "Minimum (mm)", "max": "Maximum (mm)", "mean": "Average (mm)", "median": "Median (mm)"},
+                ),
+                "offsets_from_cax_mm": ReportTableLabels(row_heading="Picket", series_heading="Picket", value_heading="Distance (mm)"),
+                "warnings": ReportTableLabels(series_heading="Warning"),
+                "failed_leaves": ReportTableLabels(row_heading="Entry", value_heading="Leaf identifier"),
+            },
         )
         figure = Figure(figsize=(8, 8))
         try:
@@ -1673,8 +1731,8 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
         report.add_artifact(
             "Analysed picket fence image",
             artifact,
-            f"Input: {Path(self.image.path).name or 'In-memory image'}. "
-            f"Orientation: {self.orientation.value}. "
+            f"Image: {Path(self.image.path).name or 'Image supplied without a file name'}. "
+            f"Orientation: {orientation_label}. "
             "The cross marks the central axis. Guard rails and leaf-position "
             "overlays use the existing analysis measurements.",
         )
@@ -1711,9 +1769,9 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             "MLC leaf identifier",
             limits=limits,
             highlighted=failed_names,
-            caption="Each bar is the largest absolute error in that leaf's captured "
+            caption="Each bar is the largest absolute error in that leaf's recorded "
             "measurements. Asterisks identify failed leaves from the analysis. "
-            "The complete signed errors and positions are listed in the results appendix. "
+            "All measured errors and positions are listed in the detailed measurements. "
             "Leaves without measurements have no bar and remain in the complete results.",
         )
         report.add_histogram(
@@ -1721,19 +1779,20 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             [value for values in leaf_errors.values() for value in values],
             bins=bins,
             measurement_label="Error interval (mm)",
-            caption="All captured leaf-position errors are included. Negative and positive "
+            caption="All measured leaf-position errors are included. Negative and positive "
             "values retain their original sign. Intervals include the left boundary; "
             "only the final interval includes its right boundary.",
         )
         offsets = numeric_values(report.values["offsets_from_cax_mm"], "offsets_from_cax_mm")
         report.add_bar_chart(
             "Picket positions relative to the central axis",
-            [str(index) for index in range(len(offsets))],
+            [str(index + 1) for index in range(len(offsets))],
             offsets,
             "Offset from CAX (mm)",
-            "Picket index (0-based)",
+            "Picket number",
             caption="Offsets use the sign convention in the analysis results. "
-            "Positive offsets are to the left; picket indices start at zero.",
+            "Positive offsets are to the left. Pickets are numbered from 1, starting "
+            "with the leftmost or uppermost picket.",
         )
         widths = report.values["picket_widths"]
         if not isinstance(widths, dict):
@@ -1743,7 +1802,7 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
         for name, measurements in widths.items():
             if not isinstance(measurements, dict):
                 raise ValueError(f"Invalid width results for {name}.")
-            width_names.append(str(name))
+            width_names.append(picket_labels.get(str(name), str(name)))
             mean_widths.extend(numeric_values([measurements.get("mean")], f"picket_widths[{name}].mean"))
         report.add_bar_chart(
             "Mean picket widths",
@@ -1751,8 +1810,8 @@ class PicketFence(ResultsDataMixin[PFResult], QuaacMixin):
             mean_widths,
             "Mean picket width (mm)",
             "Picket identifier",
-            caption="Mean widths use the captured results. Minimum, maximum and median "
-            "widths for every picket are included in the complete results.",
+            caption="Average widths use the measured results. Minimum, maximum and median "
+            "widths for every picket are included in the detailed measurements.",
         )
         report.write(filename)
 
