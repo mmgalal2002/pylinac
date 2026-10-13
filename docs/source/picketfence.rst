@@ -387,6 +387,14 @@ coordinates, not patient anatomical coordinates; a planar image does not measure
 depth. Displayed picket numbers start at 1. The attached ``results.json`` keeps
 the original identifiers and full numeric precision.
 
+Leaf-position errors and tolerances are shown to three decimal places in
+millimetres. Positions, offsets, spacing and widths use two decimal places.
+Percentages, angles and image coordinates use one decimal place, while counts
+and identifiers remain whole numbers. Tables and chart labels use the same
+precision. Histogram interval bounds may show additional decimals when needed
+to distinguish neighbouring intervals. Pass/fail decisions always use the
+unrounded measurements, not the printed values.
+
 Pylinac branding is applied to the whole report. To customise the title, fonts,
 colours and page wording, pass a ``branding`` mapping:
 
