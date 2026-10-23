@@ -10,6 +10,19 @@ Legend
 * :bdg-primary:`Refactor` denotes a code refactor; usually this means an efficiency boost or code cleanup.
 * :bdg-danger:`Change` denotes a change that may break existing code.
 
+v3.50.0
+-------
+
+Nuclear
+^^^^^^^
+
+* :bdg-success:`Feature` Nuclear analysis result JSON now includes plot source
+  data under ``plot_data``: chart series and fitted curves, plus the displayed
+  image slices and their overlays. Image-based results can therefore be larger.
+  Simple Sensitivity returns an empty ``plot_data`` object because it has no plot.
+* :bdg-warning:`Fixed` Planar Uniformity ``results_data(as_json=True)`` now emits
+  frame results as nested JSON objects instead of JSON-encoded strings.
+
 v3.49.0
 -------
 
