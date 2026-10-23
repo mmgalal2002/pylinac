@@ -167,6 +167,14 @@ Agent work: [AGENT_TASKS.md](AGENT_TASKS.md).
 
 ## Detailed PDF Reports: Review And Acceptance
 
+- [ ] Review the partial Quasar report at
+      `E:\R&D\Nuclear DCM\output\all_dcm\quasar\radlight 1 with center marker_quasar_light_rad_scaling.pdf`.
+      Confirm that the detected centers and five-center count criterion are
+      appropriate; this status does not evaluate geometric scaling tolerance.
+- [ ] Review the jaw report at
+      `E:\R&D\Nuclear DCM\output\all_dcm\jaws\10MU_isoalign_jaw_orthogonality.pdf`.
+- [ ] Restore access to the local Quasar and orthogonality test data and rerun
+      their cloud-backed integration suites; the current GCP credential file is empty.
 - [x] Review and approve the Picket Fence pilot (human confirmation, 2026-10-13).
 - [ ] Review the multi-image Winston-Lutz pilot before the wider rollout.
 - [ ] Review every coverage-matrix row, including all supported variations.
