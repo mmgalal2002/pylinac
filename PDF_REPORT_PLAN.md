@@ -284,7 +284,7 @@ there, including inherited report methods; exclusions also have explicit rows.
 | GECTQA | GECTQAResult, configured tests, localization and compatibility results | Scanner/phantom profiles, reference values and optional modules | Separate module images and available MTF visual |
 | GEHeliosCTDaily | GEHeliosResult including every ROI and low-contrast slice | Contrast scale, resolution, low contrast, noise and uniformity | Separate module images, all available curves and scan overview |
 | DLG | Measured gap, planned/measured per-leaf arrays and full regression result | Actual planned overlaps, MLC geometry and sampling settings | Leaf-gap scatter/fit and input image |
-| QuasarLightRadScaling | Complete inherited LightRadResult | Quasar scaling and field/BB geometry | Field image and detected measurements |
+| QuasarLightRadScaling | LightRadResult plus detected/expected centers, image-pixel positions and pass/fail | Quasar center-count QA and field/BB geometry | Field image and detected scaling centers |
 | JawOrthogonality | Four recorded corner angles and every detected edge | Image edges and square-field setup | Analysed image with detected jaw edges |
 | MaxCountRate | All scalar results and count-rate `plot_data` | Every supported acquisition/frame configuration | Count-rate chart with highlighted maximum |
 | PlanarUniformity | All per-frame results and serialized frame objects | Every supported frame and FOV configuration | Per-frame image views and FOV measurements |
