@@ -118,3 +118,10 @@ reports and complete-system acceptance remain unchecked.
       remain faithful to the original analysis.
 - [ ] Review rounded measurements near the tolerance limits. Confirm that printed
       precision is useful, counts stay whole and pass/fail uses unrounded results.
+
+## Recent Plotly Test Updates: 2026-10-23
+
+- [ ] Run the focused pytest command in [RECENT_TEST_COMMITS.md](RECENT_TEST_COMMITS.md);
+      confirm required local test-data access and review the results.
+- [ ] Review the Plotly threshold/axis behavior and updated figure/trace expectations
+      before accepting the test changes.
