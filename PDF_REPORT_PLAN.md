@@ -17,8 +17,8 @@ The Picket Fence pilot is implemented, human-tested and human-approved as confir
 on 2026-10-13. The human authorized the full rollout. No new PDF dependency has
 been installed. Other reports and additional variations still require review.
 
-Current delivery: 47 imaging adapters; nine nuclear medicine analyses are in scope
-and still need public PDF adapters. Standard and branded PDF examples exist for
+Current delivery: 47 imaging adapters and nine nuclear medicine PDF adapters are
+written (56 analyses); nuclear API execution/review remains pending. Standard and branded PDF examples exist for
 31 imaging analyses (62 PDFs) and eight nuclear analyses (22 PDFs): 84 review PDFs
 in total. Nuclear examples were generated directly through the existing shared
 renderer without source-code or result-JSON changes. SimpleSensitivity is blocked
@@ -26,6 +26,14 @@ on confirmed nonzero source activity. Fourteen imaging analyses await inputs/set
 and two supplied datasets fail detection before report generation. See the
 individual rows in [AGENT_TASKS.md](AGENT_TASKS.md) for exact progress; do not call
 coverage accepted while these gaps and human reviews remain open.
+
+All nine nuclear analyzers now expose `publish_pdf()` with analysis-specific
+images/charts, clinical units, full branding, optional local logos, metadata,
+notes, file/stream output and the attached result snapshot. These new-only APIs
+default to `detailed=True` and reject `detailed=False`, as no legacy nuclear PDF
+layout exists. Their implementation does not change analysis calculations,
+result schemas or existing plotting functions. The 22 nuclear examples predate
+these methods; syntax checks are not runtime, visual or clinical acceptance.
 
 ## PDF-Only Generation: 2026-10-23
 
@@ -119,13 +127,15 @@ analysis.publish_pdf("current_report.pdf", detailed=False)
 analysis.publish_pdf("detailed_report.pdf", detailed=True)
 ```
 
-- [ ] Keep `detailed=False` as the default.
+- [ ] Keep `detailed=False` as the default for existing legacy PDF entry points.
 - [ ] Add `detailed` as a keyword-only parameter after the existing parameters.
 - [ ] Keep all existing arguments, return values, file paths, streams and side effects.
 - [ ] Route only `detailed=True` to the new report code.
 - [ ] Keep the legacy PDF renderer and plotting functions available and unchanged.
 - [ ] For analyses without a PDF method, add an explicit detailed report entry point
       without changing their analysis API. Record these cases in the coverage list.
+- [x] Give the nine nuclear analyses new-only methods defaulting to `detailed=True`,
+      following DLG's convention; reject `detailed=False` rather than invent a legacy layout.
 
 ## Report Content
 
