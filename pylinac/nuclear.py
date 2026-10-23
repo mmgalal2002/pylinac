@@ -2,11 +2,28 @@ from __future__ import annotations
 
 import json
 import math
+def _rectangle_plot_overlay(
+    roi: RectangleROI, label: str, color: str
+) -> NuclearPlotOverlay:
+    vertices = roi.vertices
+    return NuclearPlotOverlay(
+        kind="line",
+        label=label,
+        color=color,
+        x_values=[float(vertex.x) for vertex in vertices]
+        + [float(vertices[0].x)],
+        y_values=[float(vertex.y) for vertex in vertices]
+        + [float(vertices[0].y)],
+        closed=True,
+    )
+
+
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature as _signature
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -14,7 +31,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 from numpy.lib.stride_tricks import sliding_window_view
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from scipy.optimize import curve_fit, minimize
 from scipy.signal import convolve2d
 from skimage.measure import block_reduce, label, regionprops
@@ -48,11 +65,70 @@ _SMALL_HOLES_KWARGS = (
 )
 
 
+class NuclearPlotSeries(BaseModel):
+    """A labelled data series used by a nuclear medicine plot."""
+
+    x_values: list[float]
+    y_values: list[float]
+    color: str | None = None
+    marker: str | None = None
+    line_style: str | None = None
+
+
+class NuclearLinePlotData(BaseModel):
+    """Line-chart data and axis metadata for a nuclear medicine plot."""
+
+    title: str
+    x_label: str
+    y_label: str
+    series: dict[str, NuclearPlotSeries]
+    fit_parameters: dict[str, float] = Field(default_factory=dict)
+    x_limits: tuple[float, float] | None = None
+    secondary_x_label: str | None = None
+    secondary_x_values: list[float] = Field(default_factory=list)
+
+
+class NuclearPlotOverlay(BaseModel):
+    """A geometric overlay on an image plot."""
+
+    kind: Literal["points", "line", "circle"]
+    label: str
+    color: str
+    x_values: list[float] = Field(default_factory=list)
+    y_values: list[float] = Field(default_factory=list)
+    center_x: float | None = None
+    center_y: float | None = None
+    radius: float | None = None
+    marker: str | None = None
+    closed: bool = False
+    value: float | None = None
+
+
+class NuclearImagePlotData(BaseModel):
+    """Image pixels and overlays used to produce a nuclear image plot."""
+
+    title: str
+    pixel_values: list[list[float]]
+    color_map: str = "gray"
+    origin: Literal["upper", "lower"] = "upper"
+    vmin: float | None = None
+    vmax: float | None = None
+    overlays: list[NuclearPlotOverlay] = Field(default_factory=list)
+
+
+class NuclearPlotData(BaseModel):
+    """Serializable chart and image data for a nuclear analysis."""
+
+    line_plots: dict[str, NuclearLinePlotData] = Field(default_factory=dict)
+    image_plots: dict[str, NuclearImagePlotData] = Field(default_factory=dict)
+
+
 class MaxCountRateResults(ResultBase):
     max_countrate: float  #:
     max_frame: int  #:
     frame_duration: float  #:
     sums: dict[int, float]  #:
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
@@ -142,6 +218,34 @@ class MaxCountRate(ResultsDataMixin[MaxCountRateResults], QuaacMixin):
             frame_duration=self.frame_duration,
             max_frame=self.max_frame,
             sums=self.sums,
+            plot_data=NuclearPlotData(
+                line_plots={
+                    "count_rate": NuclearLinePlotData(
+                        title="Count rate",
+                        x_label="Time (s)",
+                        y_label="Count Rate (cps)",
+                        secondary_x_label="Frame",
+                        secondary_x_values=[float(frame) for frame in self.sums],
+                        series={
+                            "count_rate": NuclearPlotSeries(
+                                x_values=[
+                                    float(frame * self.frame_duration)
+                                    for frame in self.sums
+                                ],
+                                y_values=[float(rate) for rate in self.sums.values()],
+                                color="tab:blue",
+                            ),
+                            "maximum": NuclearPlotSeries(
+                                x_values=[float(self.max_time)],
+                                y_values=[float(self.max_countrate)],
+                                color="red",
+                                marker="o",
+                                line_style="none",
+                            ),
+                        },
+                    )
+                }
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -165,6 +269,7 @@ class PlanarUniformityResults(BaseModel):
     ufov_differential_uniformity: float  #:
     cfov_integral_uniformity: float  #:
     cfov_differential_uniformity: float  #:
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @dataclass
@@ -229,6 +334,81 @@ class FOV:
         local_point = np.unravel_index(np.nanargmin(nan_array), self.fov.shape)
         return int(local_point[0]), int(local_point[1])
 
+    def _maximum_differential_window(
+        self,
+    ) -> tuple[float, float, int, int, float]:
+        y_differential, x_differential = self._differential_uniformities
+        max_x = max(x_differential.values())
+        max_y = max(y_differential.values())
+        if max_x > max_y:
+            max_point = max(x_differential, key=x_differential.get)
+            width = self.window_size
+            height = 1
+            value = max_x
+        else:
+            max_point = max(y_differential, key=y_differential.get)
+            width = 1
+            height = self.window_size
+            value = max_y
+        return max_point[1] - 0.5, max_point[0] - 0.5, width, height, value
+
+    def _plot_overlays(self, color: str) -> list[NuclearPlotOverlay]:
+        plot_color = {"y": "yellow", "r": "red", "b": "blue"}.get(color, color)
+        max_row, max_column = self.max_point
+        min_row, min_column = self.min_point
+        window_x, window_y, window_width, window_height, window_value = (
+            self._maximum_differential_window()
+        )
+        window_x_values = [
+            window_x,
+            window_x + window_width,
+            window_x + window_width,
+            window_x,
+            window_x,
+        ]
+        window_y_values = [
+            window_y,
+            window_y,
+            window_y + window_height,
+            window_y + window_height,
+            window_y,
+        ]
+        return [
+            NuclearPlotOverlay(
+                kind="points",
+                label=f"{self.name} Boundary",
+                color=plot_color,
+                x_values=[float(value) for value in self.boundary_x],
+                y_values=[float(value) for value in self.boundary_y],
+                marker=".",
+            ),
+            NuclearPlotOverlay(
+                kind="points",
+                label=f"{self.name} Max",
+                color=plot_color,
+                x_values=[float(max_column)],
+                y_values=[float(max_row)],
+                marker="s",
+            ),
+            NuclearPlotOverlay(
+                kind="points",
+                label=f"{self.name} Min",
+                color=plot_color,
+                x_values=[float(min_column)],
+                y_values=[float(min_row)],
+                marker="x",
+            ),
+            NuclearPlotOverlay(
+                kind="line",
+                label=f"{self.name} Max Diff. Window",
+                color=plot_color,
+                x_values=window_x_values,
+                y_values=window_y_values,
+                closed=True,
+                value=float(window_value),
+            ),
+        ]
+
     def plot_to(self, axis: Axes, color: str) -> None:
         """Plot the FOV and it's related metrics to an axis"""
         axis.scatter(
@@ -252,26 +432,9 @@ class FOV:
             marker="x",
             label=f"{self.name} Min",
         )
-        # plot the max differential uniformity 5x1 box
-        max_x = max(self._differential_uniformities[1].values())
-        max_y = max(self._differential_uniformities[0].values())
-        if max_x > max_y:
-            max_point = max(
-                self._differential_uniformities[1],
-                key=self._differential_uniformities[1].get,
-            )
-            width = self.window_size
-            height = 1
-        else:
-            max_point = max(
-                self._differential_uniformities[0],
-                key=self._differential_uniformities[0].get,
-            )
-            width = 1
-            height = self.window_size
-        # offset by half pixel so we're centered about the target pixel
+        window_x, window_y, width, height, _ = self._maximum_differential_window()
         rect = Rectangle(
-            (max_point[1] - 0.5, max_point[0] - 0.5),
+            (window_x, window_y),
             width,
             height,
             linewidth=1,
@@ -281,6 +444,23 @@ class FOV:
         )
         axis.add_patch(rect)
         axis.legend()
+
+
+def _uniformity_image_plot_data(
+    title: str, frame: np.ndarray, fovs: list[tuple[FOV, str]]
+) -> NuclearImagePlotData:
+    nonzero_frame = np.where(frame == 0, np.nan, frame)
+    return NuclearImagePlotData(
+        title=title,
+        pixel_values=frame.tolist(),
+        vmin=float(np.nanmin(nonzero_frame)),
+        vmax=float(np.nanmax(nonzero_frame)),
+        overlays=[
+            overlay
+            for fov, color in fovs
+            for overlay in fov._plot_overlays(color)
+        ],
+    )
 
 
 class PlanarUniformity(QuaacMixin):
@@ -372,13 +552,20 @@ class PlanarUniformity(QuaacMixin):
                 ufov_differential_uniformity=result["ufov"].differential_uniformity,
                 cfov_integral_uniformity=result["cfov"].integral_uniformity,
                 cfov_differential_uniformity=result["cfov"].differential_uniformity,
+                plot_data=NuclearPlotData(
+                    image_plots={
+                        "frame": _uniformity_image_plot_data(
+                            title=f"Frame {key}",
+                            frame=result["binned_frame"],
+                            fovs=[(result["ufov"], "y"), (result["cfov"], "r")],
+                        )
+                    }
+                ),
             )
-            if as_dict:
+            if as_dict or as_json:
                 # make the key 1-based for ease of understanding by the user and match
                 # dicom labeling
-                data[f"Frame {key}"] = r.model_dump()
-            elif as_json:
-                data[f"Frame {key}"] = r.model_dump_json()
+                data[f"Frame {key}"] = r.model_dump(mode="json")
             else:
                 data[f"Frame {key}"] = r
         if as_json:
@@ -515,6 +702,7 @@ def determine_binning(pixel_size: float) -> int:
 class CenterOfRotationResults(ResultBase):
     x_deviation_mm: float  #:
     y_deviation_mm: float  #:
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
@@ -602,9 +790,76 @@ class CenterOfRotation(ResultsDataMixin[CenterOfRotationResults], QuaacMixin):
 
     def _generate_results_data(self) -> CenterOfRotationResults:
         """Return the results as a structure."""
+        angle_values = np.asarray(self.cor_x["x_values"], dtype=float).tolist()
         return CenterOfRotationResults(
             x_deviation_mm=self.x_cor_deviation_mm,
             y_deviation_mm=self.y_cor_deviation_mm,
+            plot_data=NuclearPlotData(
+                line_plots={
+                    "x_sine_fit": NuclearLinePlotData(
+                        title="Sine fit (X-axis)",
+                        x_label="Angle (radians)",
+                        y_label="Position (mm)",
+                        fit_parameters={
+                            name: float(self.cor_x[name])
+                            for name in ("a", "b", "c", "phi")
+                        },
+                        series={
+                            "position": NuclearPlotSeries(
+                                x_values=angle_values,
+                                y_values=np.asarray(
+                                    self.cor_x["y_values"], dtype=float
+                                ).tolist(),
+                                color="blue",
+                                marker="o",
+                                line_style="none",
+                            ),
+                            "sine_fit": NuclearPlotSeries(
+                                x_values=angle_values,
+                                y_values=np.asarray(
+                                    self.cor_x["fitted_y_values"], dtype=float
+                                ).tolist(),
+                                color="red",
+                                line_style="-",
+                            ),
+                        },
+                    ),
+                    "x_residuals": NuclearLinePlotData(
+                        title="Residual error (X-axis)",
+                        x_label="Angle (radians)",
+                        y_label="Residual Error (mm)",
+                        series={
+                            "residuals": NuclearPlotSeries(
+                                x_values=angle_values,
+                                y_values=np.asarray(
+                                    self.cor_x["residuals"], dtype=float
+                                ).tolist(),
+                                color="blue",
+                                marker="o",
+                                line_style="none",
+                            )
+                        },
+                    ),
+                    "y_residuals": NuclearLinePlotData(
+                        title="Residual error (Y-axis)",
+                        x_label="Angle (radians)",
+                        y_label="Residual Error (mm)",
+                        series={
+                            "residuals": NuclearPlotSeries(
+                                x_values=np.asarray(
+                                    self.cor_y["x_values"], dtype=float
+                                ).tolist(),
+                                y_values=np.asarray(
+                                    self.cor_y["residuals"], dtype=float
+                                ).tolist(),
+                                color="blue",
+                                marker="o",
+                                line_style="none",
+                            )
+                        },
+                    ),
+                }
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -693,6 +948,7 @@ class TomographicResolutionResults(ResultBase):
     x_fwtm: float  #:
     y_fwtm: float  #:
     z_fwtm: float  #:
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @dataclass
@@ -720,22 +976,60 @@ class TomographicResolutionAxisData:
         """The full width at tenth maximum of the x-profile."""
         return fwtm_from_gaussian(self.popt[2])
 
-    def plot(self) -> (Figure, Axes):
-        fig, ax = plt.subplots()
-        xs = np.arange(len(self.profile_array)) * self.pixel_size
-        x_interpolated = (
+    def _plot_data(self) -> NuclearLinePlotData:
+        distance = np.arange(len(self.profile_array)) * self.pixel_size
+        fitted_distance = (
             np.linspace(0, len(self.profile_array), num=len(self.profile_array) * 20)
             * self.pixel_size
         )
-        fitted_y = gaussian_fit(x_interpolated, *self.popt)
-        # plot raw
-        ax.plot(xs, self.profile_array, "bo", label="Raw Data")
-        # close limits to around the peak
-        ax.set_xlim(
-            (self.popt[1] - 10 * self.popt[2]), (self.popt[1] + 10 * self.popt[2])
+        fitted_counts = gaussian_fit(fitted_distance, *self.popt)
+        return NuclearLinePlotData(
+            title=f"{self.axis}-axis profile",
+            x_label="Distance (mm)",
+            y_label="Counts",
+            x_limits=(
+                float(self.popt[1] - 10 * self.popt[2]),
+                float(self.popt[1] + 10 * self.popt[2]),
+            ),
+            fit_parameters={
+                "amplitude": float(self.popt[0]),
+                "mean_mm": float(self.popt[1]),
+                "stddev_mm": float(self.popt[2]),
+            },
+            series={
+                "raw_data": NuclearPlotSeries(
+                    x_values=distance.tolist(),
+                    y_values=np.asarray(self.profile_array, dtype=float).tolist(),
+                    color="blue",
+                    marker="o",
+                    line_style="none",
+                ),
+                "gaussian_fit": NuclearPlotSeries(
+                    x_values=fitted_distance.tolist(),
+                    y_values=np.asarray(fitted_counts, dtype=float).tolist(),
+                    color="red",
+                    line_style="-",
+                ),
+            },
         )
+
+    def plot(self) -> (Figure, Axes):
+        fig, ax = plt.subplots()
+        plot_data = self._plot_data()
+        raw_data = plot_data.series["raw_data"]
+        fitted_data = plot_data.series["gaussian_fit"]
+        # plot raw
+        ax.plot(raw_data.x_values, raw_data.y_values, "bo", label="Raw Data")
+        # close limits to around the peak
+        if plot_data.x_limits is not None:
+            ax.set_xlim(plot_data.x_limits)
         # plot fitted gaussian
-        ax.plot(x_interpolated, fitted_y, "r-", label="Gaussian Fit")
+        ax.plot(
+            fitted_data.x_values,
+            fitted_data.y_values,
+            "r-",
+            label="Gaussian Fit",
+        )
         ax.grid(True)
         ax.set_xlabel("Distance (mm)")
         ax.set_ylabel("Counts")
@@ -806,6 +1100,13 @@ class TomographicResolution(ResultsDataMixin[TomographicResolutionResults], Quaa
             x_fwtm=self.x_axis.fwtm,
             y_fwtm=self.y_axis.fwtm,
             z_fwtm=self.z_axis.fwtm,
+            plot_data=NuclearPlotData(
+                line_plots={
+                    "x_profile": self.x_axis._plot_data(),
+                    "y_profile": self.y_axis._plot_data(),
+                    "z_profile": self.z_axis._plot_data(),
+                }
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -1090,18 +1391,56 @@ class DoubleGaussianProfile:
         """The difference between the measured pixel size and the expected pixel size."""
         return (self.measured_pixel_size - self.pixel_size) / self.pixel_size * 100
 
-    def plot(self) -> (Figure, Axes):
-        fig, ax = plt.subplots()
-        xs = np.arange(len(self.profile_array)) * self.pixel_size
-        x_interpolated = (
+    def _plot_data(self) -> NuclearLinePlotData:
+        distance = np.arange(len(self.profile_array)) * self.pixel_size
+        fitted_distance = (
             np.linspace(0, len(self.profile_array), num=len(self.profile_array) * 20)
             * self.pixel_size
         )
-        fitted_y = two_peak_gaussian_fit(x_interpolated, *self.popt)
+        fitted_counts = two_peak_gaussian_fit(fitted_distance, *self.popt)
+        return NuclearLinePlotData(
+            title=f"{self.axis}-axis profile",
+            x_label="Distance (mm)",
+            y_label="Counts",
+            series={
+                "raw_data": NuclearPlotSeries(
+                    x_values=distance.tolist(),
+                    y_values=np.asarray(self.profile_array, dtype=float).tolist(),
+                    color="blue",
+                    marker="o",
+                    line_style="none",
+                ),
+                "gaussian_fit": NuclearPlotSeries(
+                    x_values=fitted_distance.tolist(),
+                    y_values=np.asarray(fitted_counts, dtype=float).tolist(),
+                    color="red",
+                    line_style="-",
+                ),
+            },
+            fit_parameters={
+                "amplitude_1": float(self.popt[0]),
+                "mean_1_mm": float(self.popt[1]),
+                "stddev_1_mm": float(self.popt[2]),
+                "amplitude_2": float(self.popt[3]),
+                "mean_2_mm": float(self.popt[4]),
+                "stddev_2_mm": float(self.popt[5]),
+            },
+        )
+
+    def plot(self) -> (Figure, Axes):
+        fig, ax = plt.subplots()
+        plot_data = self._plot_data()
+        raw_data = plot_data.series["raw_data"]
+        fitted_data = plot_data.series["gaussian_fit"]
         # plot raw
-        ax.plot(xs, self.profile_array, "bo", label="Raw Data")
+        ax.plot(raw_data.x_values, raw_data.y_values, "bo", label="Raw Data")
         # plot fitted gaussian
-        ax.plot(x_interpolated, fitted_y, "r-", label="Gaussian Fit")
+        ax.plot(
+            fitted_data.x_values,
+            fitted_data.y_values,
+            "r-",
+            label="Gaussian Fit",
+        )
         ax.grid(True)
         ax.legend()
         ax.set_xlabel("Distance (mm)")
@@ -1119,6 +1458,7 @@ class FourBarResolutionResults(ResultBase):
     y_measured_pixel_size: float
     x_pixel_size_difference: float
     y_pixel_size_difference: float
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
@@ -1204,6 +1544,26 @@ class FourBarResolution(ResultsDataMixin[FourBarResolutionResults], QuaacMixin):
             y_measured_pixel_size=self.y_axis.measured_pixel_size,
             x_pixel_size_difference=self.x_axis.pixel_size_difference,
             y_pixel_size_difference=self.y_axis.pixel_size_difference,
+            plot_data=NuclearPlotData(
+                line_plots={
+                    "x_profile": self.x_axis._plot_data(),
+                    "y_profile": self.y_axis._plot_data(),
+                },
+                image_plots={
+                    "image": NuclearImagePlotData(
+                        title=f"Four Bar Resolution for {self.path.name}",
+                        pixel_values=self.stack.frames[0].array.tolist(),
+                        overlays=[
+                            _rectangle_plot_overlay(
+                                self.x_prof, "X-axis profile ROI", "yellow"
+                            ),
+                            _rectangle_plot_overlay(
+                                self.y_prof, "Y-axis profile ROI", "yellow"
+                            ),
+                        ],
+                    )
+                },
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -1261,6 +1621,7 @@ class QuadrantResolutionResults(ResultBase):
     quadrants: dict[
         str, dict[str, float]
     ]  #:  quadrant idx: {'mtf': mtf, 'fwhm': fwhm, 'lpmm': lpmm}
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
@@ -1331,6 +1692,7 @@ class QuadrantResolution(ResultsDataMixin[QuadrantResolutionResults], QuaacMixin
 
     def _generate_results_data(self) -> QuadrantResolutionResults:
         """Return the results as a structure."""
+        lpmm_values = [float(value) for value in self.mtf.mtfs]
         return QuadrantResolutionResults(
             quadrants={
                 f"{idx + 1}": {
@@ -1342,7 +1704,56 @@ class QuadrantResolution(ResultsDataMixin[QuadrantResolutionResults], QuaacMixin
                 for idx, ((lpmm, mtf), fwhm) in enumerate(
                     zip(self.mtf.mtfs.items(), self.mtf.fwhms.values())
                 )
-            }
+            },
+            plot_data=NuclearPlotData(
+                line_plots={
+                    "mtf": NuclearLinePlotData(
+                        title="Moments-based MTF",
+                        x_label="Line pairs / mm",
+                        y_label="MTF",
+                        secondary_x_label="Pair Distance (mm)",
+                        secondary_x_values=[1 / (2 * value) for value in lpmm_values],
+                        series={
+                            "mtf": NuclearPlotSeries(
+                                x_values=lpmm_values,
+                                y_values=[float(value) for value in self.mtf.mtfs.values()],
+                                marker="o",
+                            )
+                        },
+                    ),
+                    "fwhm": NuclearLinePlotData(
+                        title="Moments-based FWHM",
+                        x_label="Line pairs / mm",
+                        y_label="FWHM",
+                        secondary_x_label="Pair Distance (mm)",
+                        secondary_x_values=[1 / (2 * value) for value in lpmm_values],
+                        series={
+                            "fwhm": NuclearPlotSeries(
+                                x_values=lpmm_values,
+                                y_values=[float(value) for value in self.mtf.fwhms.values()],
+                                marker="o",
+                            )
+                        },
+                    ),
+                },
+                image_plots={
+                    "quadrants": NuclearImagePlotData(
+                        title=f"Quadrant Resolution for {self.path.name}",
+                        pixel_values=self.stack.frames[0].array.tolist(),
+                        overlays=[
+                            NuclearPlotOverlay(
+                                kind="circle",
+                                label=f"{idx + 1}: {spacing:.2f}mm",
+                                color="yellow",
+                                center_x=float(roi.center.x),
+                                center_y=float(roi.center.y),
+                                radius=float(roi.radius),
+                            )
+                            for idx, (spacing, roi) in enumerate(self.rois.items())
+                        ],
+                    )
+                },
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -1387,6 +1798,7 @@ class TomographicUniformityResults(ResultBase):
     center_border_ratio: float
     first_frame: int
     last_frame: int
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
@@ -1516,6 +1928,19 @@ class TomographicUniformity(
             center_border_ratio=self.center_ratio,
             first_frame=self.first_frame,
             last_frame=self.last_frame,
+            plot_data=NuclearPlotData(
+                image_plots={
+                    "uniformity": _uniformity_image_plot_data(
+                        title=f"Frame {self.frame_key}",
+                        frame=self.frame_result["binned_frame"],
+                        fovs=[
+                            (self.frame_result["ufov"], "y"),
+                            (self.frame_result["cfov"], "r"),
+                            (self.frame_result["center_fov"], "b"),
+                        ],
+                    )
+                }
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -1618,6 +2043,7 @@ class TomgraphicSphere(TypedDict):
 class TomographicContrastResults(ResultBase):
     uniformity_baseline: float
     spheres: dict[str, TomgraphicSphere]
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
@@ -1760,6 +2186,43 @@ class TomographicContrast(ResultsDataMixin[TomographicContrastResults], QuaacMix
 
     def _generate_results_data(self) -> TomographicContrastResults:
         """Return the results as a structure."""
+        sphere_numbers = [float(idx) for idx in self.rois]
+        mean_contrasts = [float(roi.mean_contrast) for roi in self.rois.values()]
+        max_contrasts = [float(roi.max_contrast) for roi in self.rois.values()]
+        image_plots = {}
+        if self.rois:
+            median_slice = int(round(np.median([roi.z for roi in self.rois.values()])))
+            image_plots["sphere_frame"] = NuclearImagePlotData(
+                title=f"Sphere frame ({median_slice + 1})",
+                pixel_values=self.stack.frames[median_slice].array.tolist(),
+                overlays=[
+                    NuclearPlotOverlay(
+                        kind="circle",
+                        label=str(roi.number),
+                        color="red",
+                        center_x=float(roi.x),
+                        center_y=float(roi.y),
+                        radius=float(roi.radius),
+                    )
+                    for roi in self.rois.values()
+                ],
+            )
+        uniformity_data = self.slice_data[self.uniformity_frame]
+        uniformity_center = uniformity_data["center"]
+        image_plots["uniformity_frame"] = NuclearImagePlotData(
+            title=f"Uniformity frame ({self.uniformity_frame})",
+            pixel_values=self.stack.frames[int(self.uniformity_frame) - 1].array.tolist(),
+            overlays=[
+                NuclearPlotOverlay(
+                    kind="circle",
+                    label="Uniformity FOV",
+                    color="blue",
+                    center_x=float(uniformity_center.x),
+                    center_y=float(uniformity_center.y),
+                    radius=float(uniformity_data["fov diameter"]) / 2,
+                )
+            ],
+        )
         return TomographicContrastResults(
             uniformity_baseline=self.uniformity_value,
             spheres={
@@ -1774,6 +2237,30 @@ class TomographicContrast(ResultsDataMixin[TomographicContrastResults], QuaacMix
                 )
                 for idx, roi in self.rois.items()
             },
+            plot_data=NuclearPlotData(
+                line_plots={
+                    "contrast": NuclearLinePlotData(
+                        title="Contrast vs Sphere Number",
+                        x_label="Sphere Number",
+                        y_label="Contrast (Michelson * 100)",
+                        series={
+                            "mean_contrast": NuclearPlotSeries(
+                                x_values=sphere_numbers,
+                                y_values=mean_contrasts,
+                                color="blue",
+                                marker="o",
+                            ),
+                            "max_contrast": NuclearPlotSeries(
+                                x_values=sphere_numbers,
+                                y_values=max_contrasts,
+                                color="red",
+                                marker="o",
+                            ),
+                        },
+                    )
+                },
+                image_plots=image_plots,
+            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
