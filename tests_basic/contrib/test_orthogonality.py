@@ -1,4 +1,5 @@
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 from pylinac.contrib.orthogonality import JawOrthogonality
@@ -16,3 +17,13 @@ class TestOrthogonality(TestCase):
                 q = JawOrthogonality(file)
                 q.analyze()
                 q.plot_analyzed_image()
+
+    def test_publish_pdf(self):
+        file = next(path for path in self.dir.iterdir() if path.is_file())
+        analysis = JawOrthogonality(file)
+        analysis.analyze()
+
+        with TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "jaw_orthogonality.pdf"
+            analysis.publish_pdf(pdf_path)
+            self.assertGreater(pdf_path.stat().st_size, 0)
