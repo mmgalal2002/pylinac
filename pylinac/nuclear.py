@@ -1211,6 +1211,7 @@ class SimpleSensitivityResults(ResultBase):
     decay_correction: float  #:
     sensitivity_mbq: float  #:
     sensitivity_uci: float  #:
+    plot_data: NuclearPlotData = Field(default_factory=NuclearPlotData)
 
 
 @capture_warnings
