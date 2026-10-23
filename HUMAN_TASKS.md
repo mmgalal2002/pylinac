@@ -68,6 +68,25 @@ Twenty-two nuclear review PDFs were generated for eight analyses, alongside the
 See the output folder's `generation_status.md` for per-analysis inputs, settings,
 warning cases and filenames; the historical JSON generation record is unchanged.
 
+## Nuclear publish_pdf API Review: 2026-10-23
+
+- [x] Human authorized public PDF methods for all nine nuclear analyzers, with
+      the same image, chart and branding standards as the other detailed reports.
+- [ ] Generate reports through each new `publish_pdf()` method using approved
+      local inputs, timing, geometry and activity; review every included image
+      and chart. SimpleSensitivity requires confirmed positive activity in MBq.
+- [ ] Exercise file and binary-stream output, notes, metadata, local logos,
+      branding-logo precedence, custom fonts/colours and `open_file` behavior.
+- [ ] Confirm the new-only API defaults to `detailed=True`, rejects
+      `detailed=False` and requires a completed analysis.
+- [ ] Compare all displayed measurements and attached JSON with the existing
+      analysis results; review uniformity warnings and exclusive-end frame wording.
+- [ ] Run approved regression/documentation checks and accept each API separately.
+
+Only syntax and editor diagnostics were checked for the added methods. The 22
+existing nuclear PDFs predate these APIs and do not validate their execution.
+No runtime, visual, clinical or complete-system acceptance is claimed.
+
 ## Nuclear Plot-Ready JSON Review: 2026-10-23
 
 - [ ] Review the nuclear chart coverage and scope notes in
