@@ -49,8 +49,9 @@ Human deployment and acceptance tasks are in [HUMAN_TASKS.md](HUMAN_TASKS.md).
 ## Nuclear Plot-Ready JSON: 2026-10-23
 
 - [x] Audit every nuclear medicine `plot()` against its `results_data()` model.
-- [x] Add typed plot payloads for every nuclear analyzer that produces plots,
-      including line series, fit curves, displayed image slices and overlays.
+- [x] Add typed plot payloads to every nuclear analyzer result model, including
+      line series, fit curves, displayed image slices and overlays; leave the
+      no-plot Simple Sensitivity payload empty.
 - [x] Preserve existing scalar measurements and fix Planar Uniformity's nested
       `as_json=True` output so each frame is a JSON object, not an encoded string.
 - [x] Document the plot payload shape and per-frame Planar Uniformity JSON.
@@ -59,6 +60,23 @@ Human deployment and acceptance tasks are in [HUMAN_TASKS.md](HUMAN_TASKS.md).
 
 No application code, tests, builds or linters were run for this task, per the
 human's instruction.
+
+## Nuclear Chart Coverage Audit: 2026-10-23
+
+- [x] Recheck the current `nuclear.py` chart creation and result payloads after
+      the nuclear plot-data changes.
+- [x] Record six chart-producing analyses: MaxCountRate, CenterOfRotation,
+      TomographicResolution, FourBarResolution, QuadrantResolution and
+      TomographicContrast.
+- [x] Record the three no-chart cases: PlanarUniformity and TomographicUniformity
+      produce image views only; SimpleSensitivity has no plot method and an empty
+      `plot_data` payload.
+- [x] Confirm the nuclear charts use line/scatter-style series; no bar,
+      histogram or box chart is created in `nuclear.py`.
+- [x] Update [IMAGE_PLOT_INVENTORY.md](IMAGE_PLOT_INVENTORY.md) with chart coverage,
+      payload limitations and scope exclusions.
+- [x] Record that this was a source-only audit; no tests or runtime serialization
+      checks were performed.
 
 ## Logo Customization: 2026-10-13
 
