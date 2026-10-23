@@ -30,9 +30,24 @@
 - [ ] Multi-axis charts should identify which axis each series uses and provide that axis's label, unit, scale, and limits.
 - [ ] Keep image pixels, phantom geometry, and image-specific overlays out of this chart payload.
 
+## Nuclear Chart Audit (2026-10-23)
+
+- [x] Re-audited the current `nuclear.py` chart methods against their result `plot_data`; this is a static source review, not a runtime JSON round-trip.
+- [x] `MaxCountRate`: one count-rate line with a highlighted maximum and a secondary frame-number axis; `line_plots.count_rate` carries the data.
+- [x] `CenterOfRotation`: one X-position sine-fit chart and X/Y residual scatter charts; `line_plots` carries the measured points, fitted values, and fit parameters.
+- [x] `TomographicResolution`: three profile charts (X/Y/Z), each with raw data and Gaussian fit; `line_plots` carries the plotted series, fit parameters, and X limits.
+- [x] `FourBarResolution`: two profile charts (X/Y), each with raw data and double-Gaussian fit; `line_plots` carries the plotted series and fit parameters.
+- [x] `QuadrantResolution`: MTF and FWHM charts with pair-distance secondary-axis metadata; `line_plots` carries both series.
+- [x] `TomographicContrast`: one chart with mean- and max-contrast line series; `line_plots.contrast` carries both.
+- [x] `PlanarUniformity` and `TomographicUniformity`: no common charts; their plots are image views, which remain outside this chart-only inventory.
+- [x] `SimpleSensitivity`: no chart or plot method; its result `plot_data` remains empty.
+- [x] No bar, histogram, or box chart is created in `nuclear.py`.
+- [x] Current nuclear chart payloads use X/Y values and series styling; `NuclearLinePlotData` also carries titles, axis labels, fit parameters, X limits, and secondary-X metadata.
+- [x] Limitation: chart kind is implicit in the series styling; there is no explicit `kind` field or shared chart contract across all result models.
+
 ## Recommendation
 
 - [ ] Keep existing measurement JSON stable; add an opt-in, versioned `charts` payload containing data and presentation metadata for common charts only.
-- [ ] Use a backend-neutral schema with one object per chart and typed series, so a front end can map `line`, `scatter`, `bar`, `histogram`, and `box` to its chart library.
+- [ ] Use the nuclear line-series payload as a starting point, then define a backend-neutral, versioned chart schema with explicit `kind` and typed series; add bar, histogram, or box data only when a plotted use case requires it.
 - [ ] Use Plotly.js or Apache ECharts for interactive charts; render each chart in its own responsive component instead of packing unrelated plots into a fixed Matplotlib composite.
 - [ ] Validate chart equivalence by comparing series values, categories, units, bin edges, and axis behavior; pixel-identical screenshots are not required for data-driven charts.
