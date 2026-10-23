@@ -28,7 +28,7 @@
 - [ ] Histograms should include bin edges and counts, or raw samples plus the exact binning rule.
 - [ ] Box plots should include raw observations or quartiles, whisker rule, and outlier values so the front end can reproduce the same summary.
 - [ ] Multi-axis charts should identify which axis each series uses and provide that axis's label, unit, scale, and limits.
-- [ ] Keep image pixels, phantom geometry, and image-specific overlays out of this chart payload.
+- [x] Keep image pixels, phantom geometry, and image-specific overlays out of this chart payload.
 
 ## Nuclear Chart Audit (2026-10-23)
 
@@ -44,6 +44,25 @@
 - [x] No bar, histogram, or box chart is created in `nuclear.py`.
 - [x] Current nuclear chart payloads use X/Y values and series styling; `NuclearLinePlotData` also carries titles, axis labels, fit parameters, X limits, and secondary-X metadata.
 - [x] Limitation: chart kind is implicit in the series styling; there is no explicit `kind` field or shared chart contract across all result models.
+- [x] Removed nuclear image pixel arrays and phantom/ROI overlay data from result JSON; chart data remains in `plot_data.line_plots`. Existing Matplotlib image plotting methods are unchanged.
+
+## Matplotlib Screenshot Diagnosis (2026-10-23)
+
+- [x] The attached image matches `TomographicUniformity.plot()`'s image view: UFOV, CFOV, and Center each contribute four labeled artists (boundary, max, min, and maximum-differential window), resulting in a 12-entry legend.
+- [x] The legend is positioned inside the axes at the upper right and covers much of the displayed image; `FOV.plot_to()` also calls `axis.legend()` on each invocation before the outer plot calls it again.
+- [x] The supplied `COR_102.dcm` and `COR_180.dcm` are Center-of-Rotation inputs, not the source of this UFOV/CFOV/Center view. The repository's corresponding Tomographic Uniformity test uses `Jaszczak.dcm`, which was not found locally; the raster's pixel range/windowing cause therefore remains unverified.
+- [ ] Improve the Python plot by removing legend creation from `FOV.plot_to()` and creating one concise legend after all FOV overlays are added.
+- [ ] Move the legend outside the image axes or use a separate legend area; collapse max/min/window labels into fewer entries so the data stays visible.
+- [ ] For a representative input, inspect finite nonzero pixel count and intensity range; handle empty or constant data explicitly before choosing `vmin`/`vmax`.
+- [ ] Keep the image aspect ratio fixed and choose interpolation/windowing deliberately; verify the result with a real source image before changing clinical display defaults.
+
+## Focused JSON Serialization Check (2026-10-23)
+
+- [x] Ran offline against the supplied `COR_102.dcm` and `COR_180.dcm` files; their local sizes match the attachments.
+- [x] Both result JSON strings parse and preserve the expected deviations: COR_102 = 0.138/0.129 mm; COR_180 = 0.170/0.207 mm.
+- [x] For each file, the three serialized chart definitions and four series match the X sine-fit and X/Y residual lines returned by `CenterOfRotation.plot(show=False)`.
+- [x] Confirmed the COR JSON contains chart series but no `image_plots`, pixel arrays, or image overlays.
+- [x] This check validates chart serialization only; the COR files do not establish the cause of the black raster in the separate Tomographic Uniformity screenshot.
 
 ## Recommendation
 
