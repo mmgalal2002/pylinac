@@ -5,9 +5,8 @@ import os.path as osp
 import tempfile
 from collections.abc import Callable, Generator
 from pathlib import Path
-from unittest import  SkipTest,  TestCase, skip
+from unittest import SkipTest, TestCase, skip
 from unittest.mock import patch
-
 
 import matplotlib.pyplot as plt
 import numpy as np
