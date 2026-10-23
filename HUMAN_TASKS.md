@@ -31,8 +31,15 @@ workflows for those areas remain unchanged.
 
 ## Nuclear Plot-Ready JSON Review: 2026-10-23
 
+- [ ] Review the nuclear chart coverage and scope notes in
+      [IMAGE_PLOT_INVENTORY.md](IMAGE_PLOT_INVENTORY.md); confirm the six line/scatter
+      chart outputs and the three no-chart cases are represented correctly.
 - [ ] Confirm each nuclear result's `plot_data` reproduces the corresponding
       line series, fitted curves, image slices and overlays.
+- [ ] Confirm the current line-series metadata is sufficient for the intended
+      front end, including fit parameters, X limits and secondary axes; decide
+      whether an explicit chart-kind field is needed.
+- [ ] Confirm Simple Sensitivity's `plot_data` is empty because it has no plot.
 - [ ] Review JSON size using representative NM datasets before using it in web
       responses.
 - [ ] Approve focused result-model serialization checks before they are run.
