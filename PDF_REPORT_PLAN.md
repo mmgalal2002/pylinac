@@ -17,12 +17,35 @@ The Picket Fence pilot is implemented, human-tested and human-approved as confir
 on 2026-10-13. The human authorized the full rollout. No new PDF dependency has
 been installed. Other reports and additional variations still require review.
 
-Current delivery: 47 imaging adapters; nine nuclear medicine analyses are newly
-in scope and still need adapters. Standard and branded PDF examples exist for 31
-imaging analyses (62 PDFs). Fourteen imaging analyses await inputs/settings and
-two supplied datasets fail detection before report generation. See the individual
-rows in [AGENT_TASKS.md](AGENT_TASKS.md) for exact progress; do not call coverage
-accepted while these gaps and human reviews remain open.
+Current delivery: 47 imaging adapters; nine nuclear medicine analyses are in scope
+and still need public PDF adapters. Standard and branded PDF examples exist for
+31 imaging analyses (62 PDFs) and eight nuclear analyses (22 PDFs): 84 review PDFs
+in total. Nuclear examples were generated directly through the existing shared
+renderer without source-code or result-JSON changes. SimpleSensitivity is blocked
+on confirmed nonzero source activity. Fourteen imaging analyses await inputs/settings
+and two supplied datasets fail detection before report generation. See the
+individual rows in [AGENT_TASKS.md](AGENT_TASKS.md) for exact progress; do not call
+coverage accepted while these gaps and human reviews remain open.
+
+## PDF-Only Generation: 2026-10-23
+
+- [x] Generate standard/branded review PDFs for MaxCountRate, PlanarUniformity,
+      CenterOfRotation, TomographicResolution, FourBarResolution,
+      QuadrantResolution, TomographicUniformity and TomographicContrast, using
+      supplied local inputs only and updating Markdown after each analysis.
+- [x] Record source images, exact analysis settings, reference/default geometry,
+      existing warnings and the unchanged exclusive-end uniformity frame range.
+- [ ] Obtain the nonzero source activity and acquisition reference required for
+      SimpleSensitivity, then generate its PDFs. Supplied DICOM dose values are zero.
+- [ ] Generate the remaining imaging examples once matching inputs and clinical
+      configuration are supplied; the existing blockers remain open.
+- [ ] Obtain human geometry, wording, layout, measurement and clinical acceptance.
+
+Outputs: `E:\dcms-20261013T142612Z-1-001\detailed-reports`. Incremental nuclear
+status is recorded in that folder's `generation_status.md` and in
+[AGENT_TASKS.md](AGENT_TASKS.md). Historical JSON generation records are unchanged.
+No analysis code, plotting method or public API was edited, and no tests, builds,
+linters, screenshots or clinical acceptance checks were performed for this pass.
 
 ## Required Audience And Branding
 
