@@ -49,8 +49,8 @@ the measured positions, sine-fit curve and both axes' residual series:
 Planar uniformity returns one result per frame, with each frame's plot payload
 under ``results_data()["Frame n"]["plot_data"]``. Its ``as_json=True`` output
 contains ordinary nested JSON objects rather than JSON-encoded strings. The
-simple sensitivity analysis does not produce plots and therefore has no
-``plot_data`` field.
+simple sensitivity analysis does not produce plots, so its ``plot_data``
+object is empty.
 
 Max Count Rate
 --------------
