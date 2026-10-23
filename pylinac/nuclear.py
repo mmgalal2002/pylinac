@@ -1182,6 +1182,76 @@ class TomographicResolution(ResultsDataMixin[TomographicResolutionResults], Quaa
             f"Z-axis FWTM (mm): {self.z_axis.fwtm:.3f}\n"
         )
 
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish image-axis resolution, the reference image and profile fits.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("TomographicResolution has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "z_axis"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        reference_frame = int(round(centroid_weighted_3d(self.stack.as_3d_array())[2]))
+        fields = {
+            (f"{axis}_{width}",): ReportField(
+                f"{axis.upper()} image-axis full width at {label} maximum (mm)",
+                decimal_places=3,
+            )
+            for axis in ("x", "y", "z")
+            for width, label in (("fwhm", "half"), ("fwtm", "tenth"))
+        }
+        fields[("plot_data",)] = ReportField("Supporting resolution-chart measurements")
+        publish_analysis_report(
+            self.results_data(),
+            filename,
+            title="Nuclear Medicine Tomographic Resolution",
+            context={
+                "Input image": self.path.name,
+                "Acquisition images": len(self.stack.frames),
+                "X/Y profile reference image number": reference_frame + 1,
+                "Image pixel spacing (mm)": float(self.stack.metadata.PixelSpacing[0]),
+                "Slice spacing magnitude (mm)": abs(float(self.stack.metadata.SpacingBetweenSlices)),
+                "Coordinate convention": "X/Y/Z are image axes, not patient anatomy",
+            },
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields=fields,
+            plots={
+                "X/Y profile reference image": lambda: self.stack.frames[reference_frame].plot(show=False),
+                "Tomographic resolution profiles and Gaussian fits": self.plot,
+            },
+            open_file=open_file,
+        )
+
     def _generate_results_data(self) -> TomographicResolutionResults:
         """Return the results as a structure."""
         return TomographicResolutionResults(
@@ -1361,6 +1431,81 @@ class SimpleSensitivity(ResultsDataMixin[SimpleSensitivityResults], QuaacMixin):
             f"Decay Correction: {self.decay_correction:.3f}\n"
             f"Sensitivity (MBq): {self.sensitivity_mbq:.3f}\n"
             f"Sensitivity (uCi): {self.sensitivity_uci:.3f}\n"
+        )
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish sensitivity measurements and phantom/background images.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("SimpleSensitivity has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "activity_mbq"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        if not math.isfinite(self.activity_mbq) or self.activity_mbq <= 0:
+            raise ValueError("A finite, positive source activity in MBq is required.")
+        if not math.isfinite(self.half_life_s) or self.half_life_s <= 0:
+            raise ValueError("A finite, positive nuclide half-life is required.")
+        phantom_image = DicomImage(self.phantom_path, raw_pixels=True)
+        plots = {"Sensitivity phantom image": lambda: phantom_image.plot(show=False)}
+        if self.background_path is not None:
+            background = NMImageStack(self.background_path)
+            for frame_number, frame in enumerate(background.frames, 1):
+                plots[f"Background acquisition image {frame_number}"] = (
+                    lambda frame=frame: frame.plot(show=False)
+                )
+        publish_analysis_report(
+            self.results_data(),
+            filename,
+            title="Nuclear Medicine Simple Sensitivity",
+            context={
+                "Phantom image": self.phantom_path.name,
+                "Background acquisition": self.background_path.name if self.background_path else "Not supplied; no background subtraction",
+                "Source activity (MBq)": self.activity_mbq,
+            },
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields={
+                ("phantom_cps",): ReportField("Phantom count rate (counts/second)", decimal_places=0),
+                ("background_cps",): ReportField("Background count rate (counts/second)", decimal_places=0),
+                ("half_life_s",): ReportField("Nuclide half-life (seconds)", decimal_places=0),
+                ("duration_s",): ReportField("Phantom acquisition duration (seconds)", decimal_places=3),
+                ("decay_correction",): ReportField("Decay correction factor", decimal_places=3),
+                ("sensitivity_mbq",): ReportField("Sensitivity (counts/second/MBq)", decimal_places=3),
+                ("sensitivity_uci",): ReportField("Sensitivity (counts/minute/microcurie)", decimal_places=3),
+                ("plot_data",): ReportField("Supporting chart measurements", "This analysis does not produce a measurement chart."),
+            },
+            plots=plots,
+            open_file=open_file,
         )
 
     def _generate_results_data(
@@ -1625,6 +1770,70 @@ class FourBarResolution(ResultsDataMixin[FourBarResolutionResults], QuaacMixin):
             f"Y-axis Pixel size difference (%): {self.y_axis.pixel_size_difference:.2f}\n"
         )
 
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish four-bar resolution with the sampled image and profile fits.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("FourBarResolution has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "x_axis"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        labels = {
+            "fwhm": ("full width at half maximum (mm)", 3),
+            "fwtm": ("full width at tenth maximum (mm)", 3),
+            "measured_pixel_size": ("measured pixel size (mm)", 3),
+            "pixel_size_difference": ("pixel-size difference (%)", 1),
+        }
+        fields = {
+            (f"{axis}_{key}",): ReportField(
+                f"{axis.upper()} image-axis {label}", decimal_places=precision
+            )
+            for axis in ("x", "y")
+            for key, (label, precision) in labels.items()
+        }
+        fields[("plot_data",)] = ReportField("Supporting resolution-chart measurements")
+        publish_analysis_report(
+            self.results_data(),
+            filename,
+            title="Nuclear Medicine Four-Bar Resolution",
+            context={"Input image": self.path.name},
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields=fields,
+            plots={"Bar phantom sampling regions and profile fits": lambda: self.plot(show=False)},
+            open_file=open_file,
+        )
+
     def _generate_results_data(self) -> FourBarResolutionResults:
         """Return the results as a structure."""
         return FourBarResolutionResults(
@@ -1767,6 +1976,79 @@ class QuadrantResolution(ResultsDataMixin[QuadrantResolutionResults], QuaacMixin
             spacing = 1 / (lpmm * 2)
             s += f"Quadrant {quadrant + 1}; Bar width: {spacing:.2f}mm; FWHM: {fwhm:.3f}mm; MTF: {mtf:.3f}\n"
         return s
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish quadrant measurements, the ROI image and resolution charts.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import (
+            ReportField,
+            ReportTableLabels,
+            publish_analysis_report,
+        )
+
+        if not detailed:
+            raise ValueError("QuadrantResolution has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "mtf"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        snapshot = self.results_data()
+        labels = {
+            "mtf": "Modulation transfer fraction",
+            "fwhm": "Full width at half maximum (mm)",
+            "lpmm": "Spatial frequency (line pairs/mm)",
+            "spacing": "Bar width (mm)",
+        }
+        fields = {
+            ("quadrants", quadrant, key): ReportField(label, decimal_places=3)
+            for quadrant in snapshot.quadrants
+            for key, label in labels.items()
+        }
+        fields[("quadrants",)] = ReportField("Quadrant resolution measurements")
+        fields[("plot_data",)] = ReportField("Supporting resolution-chart measurements")
+        publish_analysis_report(
+            snapshot,
+            filename,
+            title="Nuclear Medicine Four-Quadrant Resolution",
+            context={"Input image": self.path.name},
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields=fields,
+            table_labels={
+                "quadrants": ReportTableLabels(
+                    row_heading="Quadrant", column_labels=labels
+                )
+            },
+            plots={"Quadrant sampling image, MTF and full-width charts": lambda: self.plot(show=False)},
+            open_file=open_file,
+        )
 
     def _generate_results_data(self) -> QuadrantResolutionResults:
         """Return the results as a structure."""
@@ -1973,6 +2255,73 @@ class TomographicUniformity(
         self.frame_results[self.frame_key] = self.frame_results.pop("1")
         self.center_ratio = self.center_border_ratio(
             center_ratio=center_ratio * ufov_ratio, window_size=window_size
+        )
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish composite-image uniformity and all field-of-view overlays.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("TomographicUniformity has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "center_ratio"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        publish_analysis_report(
+            self.results_data(),
+            filename,
+            title="Nuclear Medicine Tomographic Uniformity",
+            context={
+                "Input image": self.path.name,
+                "First averaged acquired image number": self.first_frame,
+                "Last averaged acquired image number": self.last_frame - 1,
+                "Number of averaged acquired images": self.last_frame - self.first_frame,
+            },
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields={
+                ("ufov_integral_uniformity",): ReportField("Useful field integral uniformity (%)", decimal_places=1),
+                ("ufov_differential_uniformity",): ReportField("Useful field differential uniformity (%)", decimal_places=1),
+                ("cfov_integral_uniformity",): ReportField("Central field integral uniformity (%)", decimal_places=1),
+                ("cfov_differential_uniformity",): ReportField("Central field differential uniformity (%)", decimal_places=1),
+                ("center_border_ratio",): ReportField("Center-to-border mean-count ratio", decimal_places=3),
+                ("first_frame",): ReportField("First averaged acquired image number"),
+                ("last_frame",): ReportField(
+                    "Excluded end-boundary image marker",
+                    "This image is excluded from averaging. The last included image is one less than this marker.",
+                ),
+                ("plot_data",): ReportField("Supporting chart measurements"),
+            },
+            plots={"Composite uniformity image and all field measurements": lambda: self.plot(show=False)},
+            open_file=open_file,
         )
 
     def _generate_results_data(self) -> TomographicUniformityResults:
@@ -2231,6 +2580,91 @@ class TomographicContrast(ResultsDataMixin[TomographicContrastResults], QuaacMix
         for idx, roi in self.rois.items():
             s += f"Sphere {idx}: X={roi.x:.2f},Y={roi.y:.2f},Z={roi.z:.2f} Mean: {roi.mean_value:.2f}; Mean Contrast: {roi.mean_contrast:.2f}; Max Contrast: {roi.max_contrast:.2f}\n"
         return s
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish sphere contrast, reference images and the contrast chart.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import (
+            ReportField,
+            ReportTableLabels,
+            publish_analysis_report,
+        )
+
+        if not detailed:
+            raise ValueError("TomographicContrast has no legacy PDF. Use detailed=True.")
+        if not getattr(self, "rois", None):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        snapshot = self.results_data()
+        labels = {
+            "x": "Horizontal image position (pixels)",
+            "y": "Vertical image position (pixels)",
+            "z": "Image-stack position (zero-based slice index)",
+            "radius": "Sphere sampling radius (pixels)",
+            "mean": "Mean sphere image value",
+            "mean_contrast": "Mean sphere contrast (%)",
+            "max_contrast": "Maximum sphere contrast (%)",
+        }
+        fields = {
+            ("spheres", sphere, key): ReportField(
+                label, decimal_places=2 if key == "mean" else 1
+            )
+            for sphere in snapshot.spheres
+            for key, label in labels.items()
+        }
+        fields.update({
+            ("uniformity_baseline",): ReportField("Uniformity reference image value"),
+            ("spheres",): ReportField("Sphere contrast measurements"),
+            ("plot_data",): ReportField("Supporting contrast-chart measurements"),
+        })
+        publish_analysis_report(
+            snapshot,
+            filename,
+            title="Nuclear Medicine Tomographic Contrast",
+            context={
+                "Input image": self.path.name,
+                "Acquisition images": len(self.stack.frames),
+                "Measured spheres": len(self.rois),
+                "Uniformity reference image number": int(self.uniformity_frame),
+                "Coordinate convention": "Image coordinates only; no patient anatomy inferred",
+            },
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields=fields,
+            table_labels={
+                "spheres": ReportTableLabels(row_heading="Sphere", column_labels=labels)
+            },
+            plots={"Sphere image, uniformity reference image and contrast chart": lambda: self.plot(show=False)},
+            open_file=open_file,
+        )
 
     def _generate_results_data(self) -> TomographicContrastResults:
         """Return the results as a structure."""
