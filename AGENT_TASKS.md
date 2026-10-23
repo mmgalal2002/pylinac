@@ -10,11 +10,13 @@ Approval applies to Picket Fence only, not to unreviewed reports or variations.
 
 ## Current Scope
 
-The human narrowed the detailed-PDF rollout on 2026-10-13 to **X-ray imaging,
-MRI, CT and mammography only**. Nuclear medicine, calibration, machine-log and
-non-image device reports remain excluded from that PDF rollout. On 2026-10-23,
-the human authorized a separate nuclear plot-data JSON task; it does not add
-nuclear PDF adapters or widen the report scope.
+On 2026-10-23, the human expanded the detailed-PDF rollout to include nuclear
+medicine and **every supported phantom-based QA analysis and variation** across
+the package, in addition to the existing X-ray imaging, MRI, CT and mammography
+scope. All nine nuclear analyzer classes are now included and still need PDF
+adapters, examples and review. Calibration, machine-log and device-only reports
+remain excluded. The earlier nuclear plot-data JSON task was separate; this later
+authorization explicitly expands the PDF scope.
 
 Use only the supplied local folder `E:\dcms-20261013T142612Z-1-001\dcms`.
 Do not download data or install dependencies. The human explicitly declined
@@ -59,7 +61,24 @@ Human deployment and acceptance tasks are in [HUMAN_TASKS.md](HUMAN_TASKS.md).
       [HUMAN_TASKS.md](HUMAN_TASKS.md).
 
 No application code, tests, builds or linters were run for this task, per the
-human's instruction.
+human's instruction. Its original scope did not include PDFs; the later PDF scope
+expansion is recorded below.
+
+## Nuclear Medicine PDF Scope Expansion: 2026-10-23
+
+- [x] Record the human's authorization to include all nuclear medicine analyses
+      and every supported phantom-based QA analysis and variation in the report
+      rollout, superseding the earlier nuclear exclusion.
+- [x] Add all nine nuclear analyzer classes to the coverage matrix and mark their
+      detailed-report work as pending.
+- [ ] Implement detailed PDF adapters for every in-scope nuclear analysis while
+      preserving existing legacy PDF behavior.
+- [ ] Generate examples for every matching local input and supported variation;
+      record missing inputs and configuration blockers.
+- [ ] Complete field/artifact review and human acceptance for every new report.
+
+Only Markdown scope and tracking were changed for this authorization. No
+application code, tests, builds, linters or screenshots were run.
 
 ## Nuclear Chart Coverage Audit: 2026-10-23
 
@@ -78,6 +97,27 @@ human's instruction.
 - [x] Record that this was a source-only audit; no tests or runtime serialization
       checks were performed.
 
+## Nuclear JSON Image-Payload Removal: 2026-10-23
+
+- [x] Remove pixel arrays, raster metadata and phantom/ROI overlay geometry from
+      nuclear result JSON; retain common chart series under `plot_data.line_plots`.
+- [x] Keep existing Matplotlib `plot()` image views unchanged; the JSON scope is
+      chart data only.
+- [x] Record the attached Matplotlib image diagnosis and Python-side improvement
+      options in [IMAGE_PLOT_INVENTORY.md](IMAGE_PLOT_INVENTORY.md).
+- [x] Search the repository for references to the removed image-payload models;
+      no references outside `nuclear.py` were found.
+- [x] Run focused offline serialization checks against the supplied COR_102 and
+      COR_180 DICOMs: both expected deviations matched, JSON parsed, all three
+      chart definitions/four series matched plotted Matplotlib lines, and no
+      raster or overlay payload was present.
+
+No full pytest suite, build or linter was run; the focused inline Python check
+above passed. The supplied COR files are not the source for the Tomographic
+Uniformity screenshot. Its matching `Jaszczak.dcm` was not found locally, so
+pixel/windowing diagnosis and visual plot changes remain pending source data and
+human review.
+
 ## Logo Customization: 2026-10-13
 
 - [x] Confirm the existing `logo=` argument reaches the shared detailed renderer,
@@ -93,11 +133,12 @@ No tests, builds, linters or screenshots were run for this revision.
 
 ## Rollout Summary
 
-- 47 concrete imaging analyses have detailed-report adapters.
-- 31 analyses generated standard and branded reports: 62 PDFs in total.
-- 14 analyses await matching input data or required clinical settings.
-- 2 supplied cases fail during analysis before PDF generation: ACR CT and IBA Primus.
-- 18 non-imaging workflows are explicitly excluded by the revised scope.
+- 47 concrete imaging analyses have detailed-report adapters; the nine nuclear
+      medicine analyses are newly in scope and have no detailed-report adapters yet.
+- 31 imaging analyses generated standard and branded reports: 62 PDFs in total.
+- 14 imaging analyses await matching input data or required clinical settings.
+- 2 supplied imaging cases fail during analysis before PDF generation: ACR CT and IBA Primus.
+- Calibration, machine-log and device-only workflows remain excluded from scope.
 - Only the original Picket Fence pilot is human-approved. New report examples
       and all unreviewed variations still require human acceptance.
 
@@ -218,15 +259,15 @@ subclass does not override the report entry point.
 | GECTQA                           | Implemented       | Standard and branded; profile warning retained   | Pending          |
 | GEHeliosCTDaily                  | Implemented       | Standard and branded                             | Pending          |
 | DLG                              | Implemented       | Awaiting image and overlap settings              | Pending          |
-| MaxCountRate                     | Excluded by scope | Not applicable                                   | Not applicable   |
-| PlanarUniformity                 | Excluded by scope | Not applicable                                   | Not applicable   |
-| CenterOfRotation                 | Excluded by scope | Not applicable                                   | Not applicable   |
-| TomographicResolution            | Excluded by scope | Not applicable                                   | Not applicable   |
-| SimpleSensitivity                | Excluded by scope | Not applicable                                   | Not applicable   |
-| FourBarResolution                | Excluded by scope | Not applicable                                   | Not applicable   |
-| QuadrantResolution               | Excluded by scope | Not applicable                                   | Not applicable   |
-| TomographicUniformity            | Excluded by scope | Not applicable                                   | Not applicable   |
-| TomographicContrast              | Excluded by scope | Not applicable                                   | Not applicable   |
+| MaxCountRate                     | Pending           | Not generated                                     | Pending          |
+| PlanarUniformity                 | Pending           | Not generated                                     | Pending          |
+| CenterOfRotation                 | Pending           | Not generated                                     | Pending          |
+| TomographicResolution            | Pending           | Not generated                                     | Pending          |
+| SimpleSensitivity                | Pending           | Not generated                                     | Pending          |
+| FourBarResolution                | Pending           | Not generated                                     | Pending          |
+| QuadrantResolution               | Pending           | Not generated                                     | Pending          |
+| TomographicUniformity            | Pending           | Not generated                                     | Pending          |
+| TomographicContrast              | Pending           | Not generated                                     | Pending          |
 | Dynalog                          | Excluded by scope | Not applicable                                   | Not applicable   |
 | TrajectoryLog                    | Excluded by scope | Not applicable                                   | Not applicable   |
 | MachineLogs                      | Excluded by scope | Not applicable                                   | Not applicable   |
