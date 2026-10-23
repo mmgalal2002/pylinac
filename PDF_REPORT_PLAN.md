@@ -3,9 +3,13 @@
 ## Goal
 
 Add a complete, clear PDF report for every supported **X-ray imaging, MRI, CT
-and mammography** QA test and its variations, as narrowed by the human on
-2026-10-13. Nuclear medicine, calibration, machine logs and non-image device
-workflows are explicitly excluded from this rollout, not silently omitted.
+and mammography** QA test and its variations, plus every nuclear medicine
+analysis and every supported phantom-based QA analysis in the package. The human
+expanded the scope on 2026-10-23 to include nuclear medicine and all phantom
+classes and variations; this supersedes the earlier nuclear exclusion. Calibration,
+machine logs and device-only workflows remain explicitly excluded, not silently
+omitted.
+No supported phantom-based QA analysis is excluded because of its modality.
 Show all structured results as readable report sections, with useful charts and
 the analysis artifacts. Keep the current PDF option unchanged.
 
@@ -13,11 +17,12 @@ The Picket Fence pilot is implemented, human-tested and human-approved as confir
 on 2026-10-13. The human authorized the full rollout. No new PDF dependency has
 been installed. Other reports and additional variations still require review.
 
-Current delivery: 47 imaging adapters; standard and branded PDF examples for 31
-analyses (62 PDFs). Fourteen analyses await inputs/settings and two supplied
-datasets fail detection before report generation. See the individual rows in
-[AGENT_TASKS.md](AGENT_TASKS.md) for exact progress; do not call coverage accepted
-while these gaps and human reviews remain open.
+Current delivery: 47 imaging adapters; nine nuclear medicine analyses are newly
+in scope and still need adapters. Standard and branded PDF examples exist for 31
+imaging analyses (62 PDFs). Fourteen imaging analyses await inputs/settings and
+two supplied datasets fail detection before report generation. See the individual
+rows in [AGENT_TASKS.md](AGENT_TASKS.md) for exact progress; do not call coverage
+accepted while these gaps and human reviews remain open.
 
 ## Required Audience And Branding
 
@@ -172,7 +177,7 @@ Current anchors: [pylinac/core/pdf.py](pylinac/core/pdf.py),
 Here, "test" means a QA analysis, not a pytest execution report. This is the starting
 coverage list, not a claim that every class already has JSON or PDF support.
 
-| Test family | Required imaging coverage |
+| Test family | Required report coverage |
 | --- | --- |
 | Picket Fence | MLC types, separate/pair leaves, orientations and tolerances |
 | Winston-Lutz | 2D, multi-image, multi-target/multi-field and available axes |
@@ -187,7 +192,8 @@ coverage list, not a claim that every class already has JSON or PDF support.
 | GE CT QA and Helios | Every configured result section and available module artifact |
 | DLG | Image-derived leaf overlap measurements and recorded fit |
 | Community imaging modules | Quasar scaling and jaw orthogonality |
-| Nuclear, calibration, machine logs, field devices | Excluded by the human on 2026-10-13 |
+| Nuclear medicine | Every analyzer, result field, chart/image artifact and supported variation |
+| Calibration, machine logs, device-only workflows | Excluded by the human on 2026-10-23 |
 
 ## Class And Variation Matrix
 
@@ -247,6 +253,15 @@ there, including inherited report methods; exclusions also have explicit rows.
 | DLG | Measured gap, planned/measured per-leaf arrays and full regression result | Actual planned overlaps, MLC geometry and sampling settings | Leaf-gap scatter/fit and input image |
 | QuasarLightRadScaling | Complete inherited LightRadResult | Quasar scaling and field/BB geometry | Field image and detected measurements |
 | JawOrthogonality | Four recorded corner angles and every detected edge | Image edges and square-field setup | Analysed image with detected jaw edges |
+| MaxCountRate | All scalar results and count-rate `plot_data` | Every supported acquisition/frame configuration | Count-rate chart with highlighted maximum |
+| PlanarUniformity | All per-frame results and serialized frame objects | Every supported frame and FOV configuration | Per-frame image views and FOV measurements |
+| CenterOfRotation | All scalar results and fit/residual `plot_data` | Every supported image set and acquisition configuration | Sine-fit chart and X/Y residual charts |
+| TomographicResolution | All scalar results and X/Y/Z profile `plot_data` | Every supported image set and profile configuration | Three measured-profile charts with Gaussian fits |
+| SimpleSensitivity | Every scalar result; empty `plot_data` | Every supported acquisition configuration | All available analysis results; no chart is produced |
+| FourBarResolution | All scalar results and X/Y profile `plot_data` | Every supported image set and profile configuration | Two measured-profile charts with double-Gaussian fits |
+| QuadrantResolution | All scalar results and MTF/FWHM `plot_data` | Every supported image set and pair-distance configuration | MTF and FWHM charts with secondary-axis metadata |
+| TomographicUniformity | All scalar results and FOV measurements | Every supported frame and FOV configuration | Tomographic image view and FOV overlays |
+| TomographicContrast | All scalar results and mean/max contrast `plot_data` | Every supported image set and contrast configuration | Contrast chart with mean and maximum series |
 
 Generation uses local inputs only. Missing variants remain awaiting input instead
 of being generated from the wrong phantom. IBA Primus and ACR CT currently fail
