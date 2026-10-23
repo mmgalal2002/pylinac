@@ -25,8 +25,9 @@ Plot-Ready Result Data
 Each nuclear analysis that produces plots includes the source data for its
 plots in the ``plot_data`` field returned by ``results_data()``. Line plots provide named
 series with matching ``x_values`` and ``y_values`` arrays, plus fit parameters
-and axis metadata where applicable. Image plots provide ``pixel_values`` and
-the geometric ``overlays`` used to mark regions, boundaries and measurements.
+and axis metadata where applicable. Image views and their region overlays remain
+available through the plotting methods and PDF reports; image pixels and overlay
+geometry are not included in result JSON.
 This lets a client build charts from the analysis result without extracting
 values from a rendered image.
 
@@ -51,6 +52,83 @@ under ``results_data()["Frame n"]["plot_data"]``. Its ``as_json=True`` output
 contains ordinary nested JSON objects rather than JSON-encoded strings. The
 simple sensitivity analysis does not produce plots, so its ``plot_data``
 object is empty.
+
+PDF Reports
+-----------
+
+All nine nuclear analyzers provide ``publish_pdf()`` after analysis. Reports use
+the same detailed renderer as the imaging modules: clinical measurement labels,
+measurement tables, analysis images, charts, warnings and an attached full-precision
+JSON result snapshot. Printed measurements use clinical display precision; the
+analysis results and attached values are not rounded or changed.
+
+For example, using a local center-of-rotation acquisition:
+
+.. code-block:: python
+
+  from pylinac.nuclear import CenterOfRotation
+
+  cor = CenterOfRotation(r"C:\path\to\COR.dcm")
+  cor.analyze()
+  cor.publish_pdf(
+      "center_of_rotation_report.pdf",
+      detailed=True,
+      notes="Acquisition setup reviewed by the operator.",
+      metadata={"Unit": "SPECT 1"},
+      branding={
+          "name": "Department QA",
+          "primary_color": "#165A70",
+          "chart_color": "#287A63",
+      },
+  )
+
+These are new PDF APIs with no older nuclear PDF layout. Therefore
+``detailed=True`` is the default, and ``detailed=False`` raises ``ValueError``.
+Existing imaging modules retain their previous defaults and legacy layouts.
+
+Report images and charts are analysis-specific:
+
+.. list-table:: Nuclear report visuals
+   :header-rows: 1
+   :widths: 28 72
+
+   * - Analysis
+     - Included views
+   * - MaxCountRate
+     - Count-rate chart and acquisition image at the maximum count rate.
+   * - PlanarUniformity
+     - Every analyzed frame with its existing field-of-view overlays.
+   * - CenterOfRotation
+     - First acquisition image, fitted rotation-position chart and both residual charts.
+   * - TomographicResolution
+     - Reference image used for the X/Y profiles and all three Gaussian-fit charts.
+   * - SimpleSensitivity
+     - Phantom image and every supplied background frame; no measurement chart is invented.
+   * - FourBarResolution
+     - Phantom sampling image and both fitted profile charts.
+   * - QuadrantResolution
+     - Phantom ROI image, MTF chart and full-width-at-half-maximum chart.
+   * - TomographicUniformity
+     - Composite image with useful, central and center-region overlays.
+   * - TomographicContrast
+     - Sphere image, uniformity reference image and sphere-contrast chart.
+
+Pass a local ``logo=`` to override the default or branding logo. ``branding`` accepts
+a ``ReportBranding`` instance or a mapping for report fonts, colours, title,
+header, footer and logo. ``notes`` accepts text or a sequence of notes, and
+``metadata`` accepts site/acquisition information. File paths and binary output
+streams are supported; caller-owned streams remain open. ``open_file=True`` opens
+file destinations after publishing, but does not open stream destinations.
+
+.. note::
+
+  Publishing uses the completed analysis; it does not select acquisition timing,
+  physical phantom geometry or clinical acceptance criteria. Confirm these when
+  calling ``analyze()``. SimpleSensitivity also requires a finite, positive source
+  activity and nuclide half-life. TomographicUniformity retains its existing
+  exclusive-end averaging range: the report identifies the last included image
+  separately from the excluded end-boundary marker. Existing plot overlays and
+  legend placement are retained, and clinical/visual review remains necessary.
 
 Max Count Rate
 --------------
