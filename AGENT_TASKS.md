@@ -412,11 +412,27 @@ execution or acceptance of those methods using the earlier PDFs.
 | TG51ElectronModern               | Excluded by scope | Not applicable                                        | Not applicable   |
 | TRS398Photon                     | Excluded by scope | Not applicable                                        | Not applicable   |
 | TRS398Electron                   | Excluded by scope | Not applicable                                        | Not applicable   |
-| QuasarLightRadScaling            | Implemented       | Awaiting matching input                               | Pending          |
+| QuasarLightRadScaling            | Implemented       | Detailed PDF generated; 2/5 centers reported as FAIL  | Pending          |
 | JawOrthogonality                 | Implemented       | Standard and branded                                  | Pending          |
 
 Variation requirements and known gaps are recorded in
 [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md). No new adapter is marked human-tested.
+
+## Quasar Scaling-Center Mismatch: 2026-10-23
+
+- [x] Let Quasar analysis complete with partial or excess scaling-center detections.
+- [x] Add detected/expected counts, image-pixel positions and a pass/fail result;
+      only the expected five centers pass this count check.
+- [x] Show the count and status in the analysis summary, plot and inherited PDF.
+- [x] Add offline tests for partial detection and detailed PDF tests for Quasar
+      and jaw orthogonality.
+- [x] Analyze `radlight 1 with center marker.dcm`: two centers were detected and
+      reported as `2/5`, `passed=False`.
+- [x] Generate detailed reports at
+      `E:\R&D\Nuclear DCM\output\all_dcm\quasar\radlight 1 with center marker_quasar_light_rad_scaling.pdf`
+      and `E:\R&D\Nuclear DCM\output\all_dcm\jaws\10MU_isoalign_jaw_orthogonality.pdf`.
+- [ ] Run the cloud-backed contrib suites when valid local test data access is
+      available; the current `GCP_creds.json` is empty, so those tests fail in setup.
 
 ## Local Example Generation
 
