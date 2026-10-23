@@ -14,8 +14,9 @@ On 2026-10-23, the human expanded the detailed-PDF rollout to include nuclear
 medicine and **every supported phantom-based QA analysis and variation** across
 the package, in addition to the existing X-ray imaging, MRI, CT and mammography
 scope. All nine nuclear analyzer classes are included. Review PDFs now exist for
-eight of them; SimpleSensitivity is blocked on source activity. Public PDF
-adapters and human acceptance remain pending. Calibration, machine-log and
+eight of them; SimpleSensitivity example generation is blocked on source activity.
+All nine public PDF adapters are written; execution and human acceptance remain
+pending. Calibration, machine-log and
 device-only reports remain excluded. The earlier nuclear plot-data JSON task was
 separate; this later authorization explicitly expands the PDF scope.
 
@@ -72,7 +73,7 @@ expansion is recorded below.
       rollout, superseding the earlier nuclear exclusion.
 - [x] Add all nine nuclear analyzer classes to the coverage matrix and mark their
       detailed-report work as pending.
-- [ ] Implement detailed PDF adapters for every in-scope nuclear analysis while
+- [x] Implement detailed PDF adapters for every in-scope nuclear analysis while
       preserving existing legacy PDF behavior.
 - [ ] Generate examples for every matching local input and supported variation;
       record missing inputs and configuration blockers.
@@ -80,6 +81,39 @@ expansion is recorded below.
 
 Only Markdown scope and tracking were changed for this authorization. No
 application code, tests, builds, linters or screenshots were run.
+
+## Nuclear publish_pdf APIs: 2026-10-23
+
+The human subsequently authorized public PDF methods for all nine nuclear
+analyzers. This supersedes the no-public-API restriction of the earlier example
+generation pass, not the prohibition on changing analysis results or plotting.
+Use the existing shared renderer, clinical wording, full branding, local logos,
+notes, metadata, output streams and the complete-precision JSON attachment.
+As with DLG, these new-only APIs default to `detailed=True` and reject
+`detailed=False` because no legacy nuclear PDF layout exists.
+
+- [x] MaxCountRate: count-rate chart and peak-count acquisition image.
+- [x] PlanarUniformity: every frame's measurements and existing FOV image overlays.
+- [x] CenterOfRotation: reference acquisition image, position fit and residual charts.
+- [x] TomographicResolution: profile reference image and all three Gaussian fits.
+- [x] SimpleSensitivity: measurements, phantom and optional background images;
+      require a finite positive activity and nuclide half-life before publishing.
+- [x] FourBarResolution: sampled phantom image, both profile fits and resolution data.
+- [x] QuadrantResolution: phantom ROI image, MTF and FWHM charts.
+- [x] TomographicUniformity: composite image, all FOV measurements and accurate
+      exclusive-end frame-range wording.
+- [x] TomographicContrast: sphere/reference images, all sphere results and contrast chart.
+- [x] Document the common API and leave runtime/visual/clinical checks human-owned.
+
+Static verification: Pylance reports no Python syntax errors and no diagnostics
+in the added methods. Existing tuple-return annotation diagnostics in older
+plotting/helpers remain unchanged. No API execution, PDF regeneration, tests,
+builds, linters, screenshots or dependency installations were performed for this
+implementation. Analysis calculations, result schemas and plotting functions are
+unchanged; the new methods capture existing views through the shared renderer.
+
+The 22 earlier example PDFs were generated directly, before these APIs existed;
+they are not evidence that the new methods have been executed or accepted.
 
 ## PDF-Only Nuclear Example Generation: 2026-10-23
 
@@ -210,8 +244,9 @@ No tests, builds, linters or screenshots were run for this revision.
 
 ## Rollout Summary
 
-- 47 concrete imaging analyses have detailed-report adapters; the nine nuclear
-  medicine analyses have no public detailed-report adapters yet.
+- 47 concrete imaging analyses and all nine nuclear medicine analyses have
+      detailed-report adapters: 56 analyses in total. Nuclear API execution and
+      human acceptance remain pending.
 - 31 imaging analyses generated standard and branded reports: 62 PDFs in total.
 - 8 nuclear analyses generated 22 standard/branded PDFs directly through the
   existing shared renderer; SimpleSensitivity awaits confirmed source activity.
@@ -291,8 +326,9 @@ its report has been rendered, tested or human-approved. Example generation is
 recorded separately; human acceptance remains pending for every new adapter.
 Inherited adapters count only when the
 subclass does not override the report entry point.
-Nuclear examples were generated directly through the shared renderer without
-adding analyzer methods; their adapter column therefore remains "Pending".
+Nuclear examples were generated directly through the shared renderer before the
+new analyzer methods were added. "Implemented" records the written API, not
+execution or acceptance of those methods using the earlier PDFs.
 
 | QA analysis                      | Adapter           | Generated example                                     | Human acceptance |
 | -------------------------------- | ----------------- | ----------------------------------------------------- | ---------------- |
@@ -342,15 +378,15 @@ adding analyzer methods; their adapter column therefore remains "Pending".
 | GECTQA                           | Implemented       | Standard and branded; profile warning retained        | Pending          |
 | GEHeliosCTDaily                  | Implemented       | Standard and branded                                  | Pending          |
 | DLG                              | Implemented       | Awaiting image and overlap settings                   | Pending          |
-| MaxCountRate                     | Pending           | Standard and branded; two acquisitions, four PDFs     | Pending          |
-| PlanarUniformity                 | Pending           | Standard and branded; two acquisitions; warnings      | Pending          |
-| CenterOfRotation                 | Pending           | Standard and branded; two acquisitions, four PDFs     | Pending          |
-| TomographicResolution            | Pending           | Standard and branded from TomoResolution.dcm          | Pending          |
-| SimpleSensitivity                | Pending           | Blocked: confirmed nonzero source activity needed     | Pending          |
-| FourBarResolution                | Pending           | Standard and branded; default geometry needs review   | Pending          |
-| QuadrantResolution               | Pending           | Standard and branded; reference geometry needs review | Pending          |
-| TomographicUniformity            | Pending           | Standard and branded from Jaszack.dcm; warnings       | Pending          |
-| TomographicContrast              | Pending           | Standard and branded from Jaszack.dcm                 | Pending          |
+| MaxCountRate                     | Implemented       | Standard and branded; two acquisitions, four PDFs     | Pending          |
+| PlanarUniformity                 | Implemented       | Standard and branded; two acquisitions; warnings      | Pending          |
+| CenterOfRotation                 | Implemented       | Standard and branded; two acquisitions, four PDFs     | Pending          |
+| TomographicResolution            | Implemented       | Standard and branded from TomoResolution.dcm          | Pending          |
+| SimpleSensitivity                | Implemented       | Blocked: confirmed nonzero source activity needed     | Pending          |
+| FourBarResolution                | Implemented       | Standard and branded; default geometry needs review   | Pending          |
+| QuadrantResolution               | Implemented       | Standard and branded; reference geometry needs review | Pending          |
+| TomographicUniformity            | Implemented       | Standard and branded from Jaszack.dcm; warnings       | Pending          |
+| TomographicContrast              | Implemented       | Standard and branded from Jaszack.dcm                 | Pending          |
 | Dynalog                          | Excluded by scope | Not applicable                                        | Not applicable   |
 | TrajectoryLog                    | Excluded by scope | Not applicable                                        | Not applicable   |
 | MachineLogs                      | Excluded by scope | Not applicable                                        | Not applicable   |
