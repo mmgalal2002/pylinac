@@ -50,6 +50,14 @@ Usage
   q.analyze()
   q.plot_analyzed_image()
   print(q.results())
+   print(q.results_data().passed)
+   q.publish_pdf("quasar_report.pdf", detailed=True)
+
+Quasar scaling analysis expects five scaling centers. If a scan contains fewer or
+more centers, analysis still completes and reports the detected/expected count,
+the available image-pixel positions, and ``passed=False``. The plot and detailed
+PDF show the same status. This pass/fail result checks the expected center count;
+it does not infer a geometric scaling tolerance.
 
 
 .. autoclass:: pylinac.contrib.quasar.QuasarLightRadScaling
