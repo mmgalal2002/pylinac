@@ -24,6 +24,23 @@ Use only the supplied local folder `E:\dcms-20261013T142612Z-1-001\dcms`.
 Do not download data or install dependencies. The human explicitly declined
 content checks; tests, builds, linters and screenshots remain human-owned.
 
+## Backend PDF APIs and Legacy Fallback: 2026-10-23
+
+- [x] Integrate per-request logo, branding, notes and metadata into the shared
+      publisher in ARTBackend and ARTFrontend's Backend Python folder, preserving
+      their existing router/service/utility architecture and base64 PDF exports.
+- [x] Add Field Profile Analysis PDF export and connect all nine nuclear adapters.
+- [x] Prefer the detailed API and, per the latest human instruction, automatically
+      fall back to a supported legacy publisher when the detailed API is absent.
+      This supersedes the historical backend policy of rejecting legacy-only builds.
+- [x] Preserve native PET/ultrasound exports through the same capability selection;
+      track their missing detailed adapters and machine-log PDF gaps in each backend.
+- [x] Track runtime, PDF layout, branding and clinical acceptance in separate backend
+      human-task files. No new tests, builds, linters or PDF generation were run.
+
+These are backend integration changes only; this library's public legacy defaults
+remain unchanged. Nuclear classes have no pre-existing legacy PDF to fall back to.
+
 ## ARTBackend Integration: 2026-10-13
 
 The human requested replacement of the existing PDF generator in the sibling
