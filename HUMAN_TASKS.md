@@ -24,10 +24,49 @@ analyses and unreviewed variations remain pending.
 - [x] Human supplied `E:\dcms-20261013T142612Z-1-001\dcms` for local generation.
 - [x] Human declined content checks and dependency installation.
 
-Nuclear medicine, machine logs, calibration and non-image device workflows are
-excluded from the detailed-PDF rollout. A separate nuclear plot-data JSON task
-was authorized on 2026-10-23; see the review checklist below. Existing PDF
-workflows for those areas remain unchanged.
+That initial scope excluded nuclear medicine, machine logs, calibration and
+non-image device workflows. On 2026-10-23 the human expanded PDF coverage to all
+nuclear medicine analyses and every supported phantom-based QA analysis and
+variation. Calibration, machine logs and device-only workflows remain excluded.
+The nuclear plot-data JSON task is separate from PDF generation.
+
+## Nuclear PDF Generation And Review: 2026-10-23
+
+- [x] Human authorized nuclear medicine and all supported phantom analyses and
+      variations in the detailed-report scope.
+- [x] Human authorized PDF-only generation with one-by-one Markdown tracking;
+      no analysis-code or JSON changes, tests, builds, linters or screenshots.
+- [ ] Review MaxCountRate PDFs and confirm acquisition timing and count-rate units.
+- [ ] Review PlanarUniformity PDFs, each frame and all FOV measurements. Both
+      acquisitions emit `All-NaN slice encountered` warnings; check for unavailable
+      measurements and confirm the analysis settings and unchanged image legends.
+- [ ] Review CenterOfRotation PDFs, acquisition geometry, fits and residuals.
+- [ ] Review TomographicResolution PDFs, image scaling and three profile fits.
+- [ ] Supply/confirm SimpleSensitivity activity, nuclide and acquisition settings;
+      review the resulting PDF when available. Supplied sensitivity images identify
+      iodine-131 but record zero dose; supply the nonzero source activity in MBq,
+      its reference time, and the matching phantom/background acquisition pair.
+- [ ] Review FourBarResolution PDFs and confirm bar geometry and image scaling.
+- [ ] Confirm QuadrantResolution phantom settings and review its PDFs. The review
+      pair uses the documented QuadrantBar reference widths
+      `(4.23, 3.18, 2.54, 2.12)` mm, `roi_diameter_mm=70` and
+      `distance_from_center_mm=130`; confirm actual widths, ordering and ROI size.
+- [ ] Review TomographicUniformity PDFs and all image/FOV measurements. The local
+      input is spelled `Nuclear/Jaszack.dcm` and contains 45 source images; default
+      averaging includes images 1-44, with excluded end marker 45. Confirm the
+      appropriate uniformity slab and review the `All-NaN slice encountered`
+      warning and unchanged image/legend placement.
+- [ ] Confirm TomographicContrast phantom settings and review its PDFs. The pair
+      uses library-default sphere diameters `(38, 31.8, 25.4, 19.1, 15.9, 12.7)` mm
+      and angles `(-10, -70, -130, -190, 110, 50)` degrees; confirm these against
+      the actual phantom before clinical use.
+
+PDF generation is not clinical acceptance. Keep every new report's human review
+unchecked until the human confirms it. Existing imaging acceptance is unchanged.
+Twenty-two nuclear review PDFs were generated for eight analyses, alongside the
+62 existing imaging PDFs. SimpleSensitivity remains blocked on source activity.
+See the output folder's `generation_status.md` for per-analysis inputs, settings,
+warning cases and filenames; the historical JSON generation record is unchanged.
 
 ## Nuclear Plot-Ready JSON Review: 2026-10-23
 
