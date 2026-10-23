@@ -34,15 +34,23 @@ workflows for those areas remain unchanged.
 - [ ] Review the nuclear chart coverage and scope notes in
       [IMAGE_PLOT_INVENTORY.md](IMAGE_PLOT_INVENTORY.md); confirm the six line/scatter
       chart outputs and the three no-chart cases are represented correctly.
-- [ ] Confirm each nuclear result's `plot_data` reproduces the corresponding
-      line series, fitted curves, image slices and overlays.
+- [ ] Confirm each chart-producing nuclear result's `plot_data.line_plots`
+      reproduces its line/scatter series and fitted curves; confirm image pixels
+      and phantom/ROI overlays are absent from result JSON.
 - [ ] Confirm the current line-series metadata is sufficient for the intended
       front end, including fit parameters, X limits and secondary axes; decide
       whether an explicit chart-kind field is needed.
 - [ ] Confirm Simple Sensitivity's `plot_data` is empty because it has no plot.
-- [ ] Review JSON size using representative NM datasets before using it in web
-      responses.
-- [ ] Approve focused result-model serialization checks before they are run.
+- [ ] Review chart-only JSON size using representative NM datasets before using
+      it in web responses.
+- [x] Authorize the focused serialization check using the supplied COR DICOMs
+      (user direction, 2026-10-23); results are recorded in [AGENT_TASKS.md](AGENT_TASKS.md).
+- [ ] Review the COR chart JSON check results and decide whether its payload is
+      sufficient for the intended front end.
+- [ ] Review the attached Tomographic Uniformity Matplotlib image using its
+      actual source DICOM (`Jaszczak.dcm`); the supplied COR files are not this
+      image's source. Verify pixel intensity/windowing and decide whether to
+      move or simplify the legend before accepting any display change.
 
 ## Custom Logo Review: 2026-10-13
 
