@@ -2,28 +2,11 @@ from __future__ import annotations
 
 import json
 import math
-def _rectangle_plot_overlay(
-    roi: RectangleROI, label: str, color: str
-) -> NuclearPlotOverlay:
-    vertices = roi.vertices
-    return NuclearPlotOverlay(
-        kind="line",
-        label=label,
-        color=color,
-        x_values=[float(vertex.x) for vertex in vertices]
-        + [float(vertices[0].x)],
-        y_values=[float(vertex.y) for vertex in vertices]
-        + [float(vertices[0].y)],
-        closed=True,
-    )
-
-
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature as _signature
 from pathlib import Path
-from typing import Literal
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -88,39 +71,10 @@ class NuclearLinePlotData(BaseModel):
     secondary_x_values: list[float] = Field(default_factory=list)
 
 
-class NuclearPlotOverlay(BaseModel):
-    """A geometric overlay on an image plot."""
-
-    kind: Literal["points", "line", "circle"]
-    label: str
-    color: str
-    x_values: list[float] = Field(default_factory=list)
-    y_values: list[float] = Field(default_factory=list)
-    center_x: float | None = None
-    center_y: float | None = None
-    radius: float | None = None
-    marker: str | None = None
-    closed: bool = False
-    value: float | None = None
-
-
-class NuclearImagePlotData(BaseModel):
-    """Image pixels and overlays used to produce a nuclear image plot."""
-
-    title: str
-    pixel_values: list[list[float]]
-    color_map: str = "gray"
-    origin: Literal["upper", "lower"] = "upper"
-    vmin: float | None = None
-    vmax: float | None = None
-    overlays: list[NuclearPlotOverlay] = Field(default_factory=list)
-
-
 class NuclearPlotData(BaseModel):
-    """Serializable chart and image data for a nuclear analysis."""
+    """Serializable chart data for a nuclear analysis."""
 
     line_plots: dict[str, NuclearLinePlotData] = Field(default_factory=dict)
-    image_plots: dict[str, NuclearImagePlotData] = Field(default_factory=dict)
 
 
 class MaxCountRateResults(ResultBase):
@@ -352,63 +306,6 @@ class FOV:
             value = max_y
         return max_point[1] - 0.5, max_point[0] - 0.5, width, height, value
 
-    def _plot_overlays(self, color: str) -> list[NuclearPlotOverlay]:
-        plot_color = {"y": "yellow", "r": "red", "b": "blue"}.get(color, color)
-        max_row, max_column = self.max_point
-        min_row, min_column = self.min_point
-        window_x, window_y, window_width, window_height, window_value = (
-            self._maximum_differential_window()
-        )
-        window_x_values = [
-            window_x,
-            window_x + window_width,
-            window_x + window_width,
-            window_x,
-            window_x,
-        ]
-        window_y_values = [
-            window_y,
-            window_y,
-            window_y + window_height,
-            window_y + window_height,
-            window_y,
-        ]
-        return [
-            NuclearPlotOverlay(
-                kind="points",
-                label=f"{self.name} Boundary",
-                color=plot_color,
-                x_values=[float(value) for value in self.boundary_x],
-                y_values=[float(value) for value in self.boundary_y],
-                marker=".",
-            ),
-            NuclearPlotOverlay(
-                kind="points",
-                label=f"{self.name} Max",
-                color=plot_color,
-                x_values=[float(max_column)],
-                y_values=[float(max_row)],
-                marker="s",
-            ),
-            NuclearPlotOverlay(
-                kind="points",
-                label=f"{self.name} Min",
-                color=plot_color,
-                x_values=[float(min_column)],
-                y_values=[float(min_row)],
-                marker="x",
-            ),
-            NuclearPlotOverlay(
-                kind="line",
-                label=f"{self.name} Max Diff. Window",
-                color=plot_color,
-                x_values=window_x_values,
-                y_values=window_y_values,
-                closed=True,
-                value=float(window_value),
-            ),
-        ]
-
     def plot_to(self, axis: Axes, color: str) -> None:
         """Plot the FOV and it's related metrics to an axis"""
         axis.scatter(
@@ -444,23 +341,6 @@ class FOV:
         )
         axis.add_patch(rect)
         axis.legend()
-
-
-def _uniformity_image_plot_data(
-    title: str, frame: np.ndarray, fovs: list[tuple[FOV, str]]
-) -> NuclearImagePlotData:
-    nonzero_frame = np.where(frame == 0, np.nan, frame)
-    return NuclearImagePlotData(
-        title=title,
-        pixel_values=frame.tolist(),
-        vmin=float(np.nanmin(nonzero_frame)),
-        vmax=float(np.nanmax(nonzero_frame)),
-        overlays=[
-            overlay
-            for fov, color in fovs
-            for overlay in fov._plot_overlays(color)
-        ],
-    )
 
 
 class PlanarUniformity(QuaacMixin):
@@ -552,15 +432,6 @@ class PlanarUniformity(QuaacMixin):
                 ufov_differential_uniformity=result["ufov"].differential_uniformity,
                 cfov_integral_uniformity=result["cfov"].integral_uniformity,
                 cfov_differential_uniformity=result["cfov"].differential_uniformity,
-                plot_data=NuclearPlotData(
-                    image_plots={
-                        "frame": _uniformity_image_plot_data(
-                            title=f"Frame {key}",
-                            frame=result["binned_frame"],
-                            fovs=[(result["ufov"], "y"), (result["cfov"], "r")],
-                        )
-                    }
-                ),
             )
             if as_dict or as_json:
                 # make the key 1-based for ease of understanding by the user and match
@@ -1550,20 +1421,6 @@ class FourBarResolution(ResultsDataMixin[FourBarResolutionResults], QuaacMixin):
                     "x_profile": self.x_axis._plot_data(),
                     "y_profile": self.y_axis._plot_data(),
                 },
-                image_plots={
-                    "image": NuclearImagePlotData(
-                        title=f"Four Bar Resolution for {self.path.name}",
-                        pixel_values=self.stack.frames[0].array.tolist(),
-                        overlays=[
-                            _rectangle_plot_overlay(
-                                self.x_prof, "X-axis profile ROI", "yellow"
-                            ),
-                            _rectangle_plot_overlay(
-                                self.y_prof, "Y-axis profile ROI", "yellow"
-                            ),
-                        ],
-                    )
-                },
             ),
         )
 
@@ -1736,23 +1593,6 @@ class QuadrantResolution(ResultsDataMixin[QuadrantResolutionResults], QuaacMixin
                             )
                         },
                     ),
-                },
-                image_plots={
-                    "quadrants": NuclearImagePlotData(
-                        title=f"Quadrant Resolution for {self.path.name}",
-                        pixel_values=self.stack.frames[0].array.tolist(),
-                        overlays=[
-                            NuclearPlotOverlay(
-                                kind="circle",
-                                label=f"{idx + 1}: {spacing:.2f}mm",
-                                color="yellow",
-                                center_x=float(roi.center.x),
-                                center_y=float(roi.center.y),
-                                radius=float(roi.radius),
-                            )
-                            for idx, (spacing, roi) in enumerate(self.rois.items())
-                        ],
-                    )
                 },
             ),
         )
@@ -1929,19 +1769,6 @@ class TomographicUniformity(
             center_border_ratio=self.center_ratio,
             first_frame=self.first_frame,
             last_frame=self.last_frame,
-            plot_data=NuclearPlotData(
-                image_plots={
-                    "uniformity": _uniformity_image_plot_data(
-                        title=f"Frame {self.frame_key}",
-                        frame=self.frame_result["binned_frame"],
-                        fovs=[
-                            (self.frame_result["ufov"], "y"),
-                            (self.frame_result["cfov"], "r"),
-                            (self.frame_result["center_fov"], "b"),
-                        ],
-                    )
-                }
-            ),
         )
 
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
@@ -2190,40 +2017,6 @@ class TomographicContrast(ResultsDataMixin[TomographicContrastResults], QuaacMix
         sphere_numbers = [float(idx) for idx in self.rois]
         mean_contrasts = [float(roi.mean_contrast) for roi in self.rois.values()]
         max_contrasts = [float(roi.max_contrast) for roi in self.rois.values()]
-        image_plots = {}
-        if self.rois:
-            median_slice = int(round(np.median([roi.z for roi in self.rois.values()])))
-            image_plots["sphere_frame"] = NuclearImagePlotData(
-                title=f"Sphere frame ({median_slice + 1})",
-                pixel_values=self.stack.frames[median_slice].array.tolist(),
-                overlays=[
-                    NuclearPlotOverlay(
-                        kind="circle",
-                        label=str(roi.number),
-                        color="red",
-                        center_x=float(roi.x),
-                        center_y=float(roi.y),
-                        radius=float(roi.radius),
-                    )
-                    for roi in self.rois.values()
-                ],
-            )
-        uniformity_data = self.slice_data[self.uniformity_frame]
-        uniformity_center = uniformity_data["center"]
-        image_plots["uniformity_frame"] = NuclearImagePlotData(
-            title=f"Uniformity frame ({self.uniformity_frame})",
-            pixel_values=self.stack.frames[int(self.uniformity_frame) - 1].array.tolist(),
-            overlays=[
-                NuclearPlotOverlay(
-                    kind="circle",
-                    label="Uniformity FOV",
-                    color="blue",
-                    center_x=float(uniformity_center.x),
-                    center_y=float(uniformity_center.y),
-                    radius=float(uniformity_data["fov diameter"]) / 2,
-                )
-            ],
-        )
         return TomographicContrastResults(
             uniformity_baseline=self.uniformity_value,
             spheres={
@@ -2260,7 +2053,6 @@ class TomographicContrast(ResultsDataMixin[TomographicContrastResults], QuaacMix
                         },
                     )
                 },
-                image_plots=image_plots,
             ),
         )
 
