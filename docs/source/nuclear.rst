@@ -19,6 +19,39 @@ have been duplicated as closely as possible.
 
 In the following examples, the sample images given by the NMQC toolkit are used [4]_.
 
+Plot-Ready Result Data
+---------------------
+
+Each nuclear analysis that produces plots includes the source data for its
+plots in the ``plot_data`` field returned by ``results_data()``. Line plots provide named
+series with matching ``x_values`` and ``y_values`` arrays, plus fit parameters
+and axis metadata where applicable. Image plots provide ``pixel_values`` and
+the geometric ``overlays`` used to mark regions, boundaries and measurements.
+This lets a client build charts from the analysis result without extracting
+values from a rendered image.
+
+For example, after running the center-of-rotation analysis, its result contains
+the measured positions, sine-fit curve and both axes' residual series:
+
+.. code-block:: python
+
+  from pylinac.nuclear import CenterOfRotation
+
+  path = r"C:\path\to\image.dcm"
+  cor = CenterOfRotation(path)
+  cor.analyze()
+  cor_data = cor.results_data(as_dict=True)
+  x_fit = cor_data["plot_data"]["line_plots"]["x_sine_fit"]
+  angles = x_fit["series"]["position"]["x_values"]
+  positions = x_fit["series"]["position"]["y_values"]
+  fitted_positions = x_fit["series"]["sine_fit"]["y_values"]
+
+Planar uniformity returns one result per frame, with each frame's plot payload
+under ``results_data()["Frame n"]["plot_data"]``. Its ``as_json=True`` output
+contains ordinary nested JSON objects rather than JSON-encoded strings. The
+simple sensitivity analysis does not produce plots and therefore has no
+``plot_data`` field.
+
 Max Count Rate
 --------------
 
