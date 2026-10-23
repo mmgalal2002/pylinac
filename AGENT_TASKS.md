@@ -10,10 +10,11 @@ Approval applies to Picket Fence only, not to unreviewed reports or variations.
 
 ## Current Scope
 
-The human narrowed the rollout on 2026-10-13 to **X-ray imaging, MRI, CT and
-mammography only**. Nuclear medicine, calibration, machine-log and non-image
-device reports are excluded. Their existing APIs remain unchanged; additions
-made earlier in this session were removed. They are not pending rollout tasks.
+The human narrowed the detailed-PDF rollout on 2026-10-13 to **X-ray imaging,
+MRI, CT and mammography only**. Nuclear medicine, calibration, machine-log and
+non-image device reports remain excluded from that PDF rollout. On 2026-10-23,
+the human authorized a separate nuclear plot-data JSON task; it does not add
+nuclear PDF adapters or widen the report scope.
 
 Use only the supplied local folder `E:\dcms-20261013T142612Z-1-001\dcms`.
 Do not download data or install dependencies. The human explicitly declined
@@ -44,6 +45,20 @@ folder is unavailable on this machine, so real-input and visual review remain
 pending. `uv`, `uvx` and `prek` are unavailable; the backend whitespace diff check
 passed. The pre-existing omitted-`crop_mm` failure remains unchanged and documented.
 Human deployment and acceptance tasks are in [HUMAN_TASKS.md](HUMAN_TASKS.md).
+
+## Nuclear Plot-Ready JSON: 2026-10-23
+
+- [x] Audit every nuclear medicine `plot()` against its `results_data()` model.
+- [x] Add typed plot payloads for every nuclear analyzer that produces plots,
+      including line series, fit curves, displayed image slices and overlays.
+- [x] Preserve existing scalar measurements and fix Planar Uniformity's nested
+      `as_json=True` output so each frame is a JSON object, not an encoded string.
+- [x] Document the plot payload shape and per-frame Planar Uniformity JSON.
+- [ ] Complete human review and any approved serialization checks in
+      [HUMAN_TASKS.md](HUMAN_TASKS.md).
+
+No application code, tests, builds or linters were run for this task, per the
+human's instruction.
 
 ## Logo Customization: 2026-10-13
 
