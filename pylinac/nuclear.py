@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
 from inspect import signature as _signature
 from pathlib import Path
+from typing import TYPE_CHECKING, BinaryIO, cast
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -35,6 +36,9 @@ from pylinac.core.roi import DiskROI, HighContrastDiskROI, RectangleROI
 from pylinac.core.utilities import QuaacDatum, QuaacMixin, ResultBase, ResultsDataMixin
 from pylinac.core.warnings import capture_warnings
 from pylinac.metrics.image import WeightedCentroid
+
+if TYPE_CHECKING:
+    from pylinac.core.reporting import ReportBranding
 
 _SMALL_OBJECTS_KWARGS = (
     {"max_size": 2}
@@ -163,6 +167,86 @@ class MaxCountRate(ResultsDataMixin[MaxCountRateResults], QuaacMixin):
             f"Max countrate: {self.max_countrate:.0f} counts/second\n"
             f"Frame duration: {self.frame_duration:.2f} seconds\n"
             f"Max frame: {self.max_frame} out of {len(self.stack.frames)}\n"
+        )
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish maximum count-rate measurements and the acquisition chart.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import (
+            ReportField,
+            ReportTableLabels,
+            publish_analysis_report,
+        )
+
+        if not detailed:
+            raise ValueError("MaxCountRate has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "sums"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        publish_analysis_report(
+            self.results_data(),
+            filename,
+            title="Nuclear Medicine Maximum Count Rate",
+            context={"Acquisition frames": len(self.stack.frames)},
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields={
+                ("max_countrate",): ReportField(
+                    "Maximum count rate (counts/second)", decimal_places=0
+                ),
+                ("max_frame",): ReportField(
+                    "Frame at maximum count rate", numbered=True
+                ),
+                ("frame_duration",): ReportField(
+                    "Frame duration (seconds)", decimal_places=3
+                ),
+                ("sums",): ReportField(
+                    "Count rate by acquisition frame (counts/second)", decimal_places=0
+                ),
+                ("plot_data",): ReportField("Supporting count-rate chart measurements"),
+            },
+            table_labels={
+                "sums": ReportTableLabels(
+                    row_heading="Acquisition frame",
+                    value_heading="Count rate (counts/second)",
+                    row_labels={str(frame): str(frame + 1) for frame in self.sums},
+                )
+            },
+            plots={
+                "Count rate over acquisition time": lambda: self.plot(show=False),
+                "Image at maximum count rate": lambda: self.stack.frames[
+                    self.max_frame
+                ].plot(show=False),
+            },
+            open_file=open_file,
         )
 
     def _generate_results_data(self) -> MaxCountRateResults:
@@ -443,6 +527,75 @@ class PlanarUniformity(QuaacMixin):
             data = json.dumps(data)
         return data
 
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish uniformity measurements and overlay images for every frame.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("PlanarUniformity has no legacy PDF. Use detailed=True.")
+        if not getattr(self, "frame_results", None):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        snapshot = cast(dict[str, dict[str, object]], self.results_data(as_dict=True))
+        labels = {
+            "ufov_integral_uniformity": "Useful field integral uniformity (%)",
+            "ufov_differential_uniformity": "Useful field differential uniformity (%)",
+            "cfov_integral_uniformity": "Central field integral uniformity (%)",
+            "cfov_differential_uniformity": "Central field differential uniformity (%)",
+        }
+        fields = {
+            (frame, key): ReportField(label, decimal_places=1)
+            for frame in snapshot
+            for key, label in labels.items()
+        }
+        fields.update({
+            (frame, "plot_data"): ReportField("Supporting chart measurements")
+            for frame in snapshot
+        })
+        publish_analysis_report(
+            snapshot,
+            filename,
+            title="Nuclear Medicine Planar Uniformity",
+            context={
+                "Input image": self.path.name,
+                "Analyzed acquisition frames": len(self.frame_results),
+            },
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields=fields,
+            plots={"Uniformity images and field measurements": lambda: self.plot(show=False)},
+            open_file=open_file,
+        )
+
     def _quaac_datapoints(self) -> dict[str, QuaacDatum]:
         data = self.results_data(as_dict=True)
         return {
@@ -657,6 +810,73 @@ class CenterOfRotation(ResultsDataMixin[CenterOfRotationResults], QuaacMixin):
             f"Center of Rotation results for {self.path.name}\n"
             f"X-axis center of rotation deviation (mm): {self.x_cor_deviation_mm:.3f}\n"
             f"Y-axis center of rotation deviation (mm): {self.y_cor_deviation_mm:.3f}\n"
+        )
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BinaryIO,
+        notes: str | Sequence[str] | None = None,
+        open_file: bool = False,
+        metadata: Mapping[str, object] | None = None,
+        logo: str | Path | None = None,
+        *,
+        detailed: bool = True,
+        branding: ReportBranding | Mapping[str, object] | None = None,
+    ) -> None:
+        """Publish rotation deviations, a reference image and all fitted charts.
+
+        Parameters
+        ----------
+        filename : str, Path or binary stream
+            Report destination. Caller-owned streams remain open.
+        notes : str or sequence of str, optional
+            Notes to include in the report.
+        open_file : bool
+            Open a file destination after publishing.
+        metadata : mapping, optional
+            Additional site or acquisition information.
+        logo : str or Path, optional
+            Local logo; takes precedence over the branding logo.
+        detailed : bool
+            Must be True; this analysis has no legacy PDF layout.
+        branding : ReportBranding or mapping, optional
+            Report fonts, colours, title, header, footer and logo.
+        """
+        from pylinac.core.reporting import ReportField, publish_analysis_report
+
+        if not detailed:
+            raise ValueError("CenterOfRotation has no legacy PDF. Use detailed=True.")
+        if not hasattr(self, "cor_y"):
+            raise ValueError("Run analyze() before publishing a PDF.")
+        publish_analysis_report(
+            self.results_data(),
+            filename,
+            title="Nuclear Medicine Center of Rotation",
+            context={
+                "Input image": self.path.name,
+                "Acquisition frames": len(self.stack.frames),
+                "Coordinate convention": "Horizontal and vertical image axes",
+            },
+            notes=notes,
+            metadata=metadata,
+            logo=logo,
+            branding=branding,
+            fields={
+                ("x_deviation_mm",): ReportField(
+                    "Maximum horizontal center-of-rotation deviation (mm)",
+                    decimal_places=3,
+                ),
+                ("y_deviation_mm",): ReportField(
+                    "Maximum vertical center-of-rotation deviation (mm)",
+                    decimal_places=3,
+                ),
+                ("plot_data",): ReportField("Supporting rotation-chart measurements"),
+            },
+            plots={
+                "Reference acquisition image (first frame)": lambda: self.stack.frames[0].plot(show=False),
+                "Fitted rotation positions and horizontal and vertical residuals": lambda: self.plot(show=False),
+            },
+            open_file=open_file,
         )
 
     def _generate_results_data(self) -> CenterOfRotationResults:
