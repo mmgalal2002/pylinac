@@ -259,3 +259,13 @@ records, not checks run for the imaging rollout. The human declined new checks.
 
 The existing `save_histogram` type-annotation diagnostic is unchanged. No regression
 test suite, documentation build or screenshot review has been run by the agent.
+
+## Recent Test Commit Audit: 2026-10-23
+
+- [x] Review the latest six reachable commits and record the commit subjects and
+      test-file deltas in [RECENT_TEST_COMMITS.md](RECENT_TEST_COMMITS.md).
+- [x] Cross-check updated Plotly test expectations against the MTF, CatPhan,
+      planar-imaging and Winston-Lutz implementations.
+- [x] Normalize the `unittest` import spacing in `tests_basic/test_planar_imaging.py`.
+- [x] Record that no test suite was executed; human execution and acceptance remain
+      pending in [HUMAN_TASKS.md](HUMAN_TASKS.md).
