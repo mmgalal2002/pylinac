@@ -23,6 +23,14 @@ Nuclear
 * :bdg-warning:`Fixed` Planar Uniformity ``results_data(as_json=True)`` now emits
   frame results as nested JSON objects instead of JSON-encoded strings.
 
+Planar Imaging
+^^^^^^^^^^^^^^
+
+* :bdg-warning:`Fixed` Quasar light/radiation scaling analysis now completes
+  when fewer or more than five scaling centers are detected. Results report the
+  detected and expected counts and center positions; incomplete detection is
+  marked as a failure in the analysis results, plot, and detailed PDF.
+
 v3.49.0
 -------
 
