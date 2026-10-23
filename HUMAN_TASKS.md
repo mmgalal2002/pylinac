@@ -25,8 +25,17 @@ analyses and unreviewed variations remain pending.
 - [x] Human declined content checks and dependency installation.
 
 Nuclear medicine, machine logs, calibration and non-image device workflows are
-excluded. The agent removed its earlier out-of-scope additions. Existing methods
-for those workflows were not replaced.
+excluded from the detailed-PDF rollout. A separate nuclear plot-data JSON task
+was authorized on 2026-10-23; see the review checklist below. Existing PDF
+workflows for those areas remain unchanged.
+
+## Nuclear Plot-Ready JSON Review: 2026-10-23
+
+- [ ] Confirm each nuclear result's `plot_data` reproduces the corresponding
+      line series, fitted curves, image slices and overlays.
+- [ ] Review JSON size using representative NM datasets before using it in web
+      responses.
+- [ ] Approve focused result-model serialization checks before they are run.
 
 ## Custom Logo Review: 2026-10-13
 
