@@ -1,5 +1,10 @@
 # Human QA Checklist
 
+## Upstream Synchronization: 2026-11-02
+
+- [x] Approve the Python 3.11 minimum and the XIM PNG export behavior change.
+- [ ] Review the merged changes and validate affected Python and XIM workflows.
+
 ## Previous QA Work
 
 The completed items below belong to earlier changes, not the detailed PDF project.

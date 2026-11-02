@@ -8,6 +8,14 @@ human confirmed that Picket Fence custom PDF generation was tested and approved,
 including the pilot design. Wider module rollout is now authorized and in progress.
 Approval applies to Picket Fence only, not to unreviewed reports or variations.
 
+## Upstream Synchronization: 2026-11-02
+
+- [x] Prepare the three-commit upstream merge, favoring local changes in conflicts.
+- [x] Preserve local and upstream v3.50.0 release notes.
+- [x] Record approval of the Python and XIM compatibility changes for human review.
+
+No tests, builds or linters were run, per the human's instructions.
+
 ## Current Scope
 
 On 2026-10-23, the human expanded the detailed-PDF rollout to include nuclear

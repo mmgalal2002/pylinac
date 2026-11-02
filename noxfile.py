@@ -1,10 +1,40 @@
 from __future__ import annotations
 
+import json
 import os
+from http.client import HTTPException
 from pathlib import Path
+from urllib.request import Request, urlopen
 
 import nox
 from nox import Session
+
+
+@nox.session(python=False)
+def post_message_to_gchat(session: Session) -> None:
+    """Post a message to the developer chat without changing the pipeline outcome."""
+    if not session.posargs or not session.posargs[0]:
+        return
+    webhook = os.environ.get("RAD_DEV_URL", "").strip().strip('"')
+    if not webhook:
+        session.log("RAD_DEV_URL is not configured; skipping failure alert.")
+        return
+
+    try:
+        request = Request(
+            webhook,
+            data=json.dumps({"text": session.posargs[0]}).encode("utf-8"),
+            headers={"Content-Type": "application/json; charset=utf-8"},
+            method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+            if 200 <= response.status < 300:
+                session.log("Failure alert sent to Google Chat.")
+            else:
+                session.log("Google Chat rejected the failure alert.")
+    except (OSError, ValueError, HTTPException):
+        # Exception messages can contain the secret webhook URL or response body.
+        session.log("Could not deliver the Google Chat failure alert.")
 
 
 def set_uv_project_env(session) -> dict[str, str]:
@@ -26,27 +56,6 @@ def sync_uv_groups(session, groups: str | list[str]) -> dict[str, str]:
         cmd.extend(["--group", group])
     session.run_install(*cmd, env=uv_env)
     return uv_env
-
-
-@nox.parametrize(
-    "numpy", ["1.23.5", "1.24.4", "1.25.2", "1.26.4", "2.0.0", "2.1.0", "2.2.0"]
-)
-@nox.parametrize("scipy", ["1.13.1", "1.14.1", "1.15.0"])
-@nox.session(
-    python="3.10",
-    reuse_venv=True,
-    venv_backend="uv",
-)
-def run_basic_test_suite_310(session: Session, numpy: str, scipy: str):
-    sync_uv_groups(session, "test")
-    session.install(f"numpy~={numpy}", f"scipy~={scipy}")
-    session.install("pip")
-    session.run("pip", "freeze")
-    session.run(
-        "pytest",
-        "-n5",
-        "tests_basic/core",
-    )
 
 
 @nox.parametrize(
