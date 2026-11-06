@@ -43,6 +43,14 @@ Planar Imaging
   detected and expected counts and center positions; incomplete detection is
   marked as a failure in the analysis results, plot, and detailed PDF.
 
+Quart
+^^^^^
+
+* :bdg-warning:`Fixed` High-contrast distances could be overestimated when noise
+  near the phantom edge caused interpolation to connect nonadjacent pixels.
+  Interpolation now preserves pixel order. Previous -700->-200 HU distances may
+  decrease when scans are reanalyzed.
+
 v3.49.0
 -------
 
