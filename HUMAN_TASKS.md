@@ -1,5 +1,15 @@
 # Human QA Checklist
 
+## CIRS062M Correction Review: 2026-11-17
+
+- [ ] Confirm the physical insert arrangement and supply the matching insert
+      certificate, density type, density units and any site reference CT numbers.
+- [ ] Review all 17 ROI locations on the supplied Elekta XVI scan, especially
+      inserts with large pixel variation; do not infer material identity from HU.
+- [ ] Review the corrected detailed PDF, insert charts, acquisition information,
+      complete-precision attached results, notes and branding.
+- [ ] Confirm any site acceptance limits and accept this phantom/report separately.
+
 ## Pilot Center Hardware Guide Review: 2026-11-11
 
 - [ ] Review [Pylinac_Pilot_Center_Hardware_Guide.pdf](Pylinac_Pilot_Center_Hardware_Guide.pdf)
