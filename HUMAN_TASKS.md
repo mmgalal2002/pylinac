@@ -1,5 +1,13 @@
 # Human QA Checklist
 
+## Pilot Center Hardware Guide Review: 2026-11-11
+
+- [ ] Review [Pylinac_Pilot_Center_Hardware_Guide.pdf](Pylinac_Pilot_Center_Hardware_Guide.pdf)
+      against the intended datasets, number of users and clinical workflow.
+- [ ] Measure representative workloads on the target hardware against an agreed
+      response-time target before purchasing or deployment.
+- [ ] Approve the site's DICOM access, backups and clinical review process.
+
 ## Upstream Synchronization: 2026-11-02
 
 - [x] Approve the Python 3.11 minimum and the XIM PNG export behavior change.
