@@ -754,6 +754,10 @@ class WLBaseImage(image.LinacDicomImage):
         self.ground()
         self.normalize()
         self.bb_arrangement = bb_arrangement
+        # Start each analysis with fresh field boundaries and computed metrics.
+        self._field_boundary = None
+        self.metrics = []
+        self.metric_values = {}
         field_caxs = self.find_field_centroids(is_open_field=is_open_field)
         field_matches = self.find_field_matches(
             field_caxs, bb_proximity_mm=bb_proximity_mm
@@ -905,7 +909,7 @@ class WLBaseImage(image.LinacDicomImage):
         show
             Whether to show the plot
         zoomed
-            Whether to zoom in on the BBs. If False, no zooming is done and the entire image is shown.
+            Whether to crop around the BBs/fields. If False, show the entire image.
         show_legend
             Whether to show the legend.
         show_colorbar
@@ -917,35 +921,11 @@ class WLBaseImage(image.LinacDicomImage):
 
         """
         if zoomed:
-            min_x = int(
-                round(
-                    min([match.bb.x for match in self.arrangement_matches.values()])
-                    - 20 * self.dpmm
-                )
-            )
-            min_y = int(
-                round(
-                    min([match.bb.y for match in self.arrangement_matches.values()])
-                    - 20 * self.dpmm
-                )
-            )
-            max_x = int(
-                round(
-                    max([match.bb.x for match in self.arrangement_matches.values()])
-                    + 20 * self.dpmm
-                )
-            )
-            max_y = int(
-                round(
-                    max([match.bb.y for match in self.arrangement_matches.values()])
-                    + 20 * self.dpmm
-                )
-            )
-            window_array = self.array[int(min_y) : int(max_y), int(min_x) : int(max_x)]
+            min_x, max_x, min_y, max_y = self._plotly_zoom_bounds()
         else:
             min_x, max_x = 0, self.shape[1]
             min_y, max_y = 0, self.shape[0]
-            window_array = self.array
+        window_array = self.array[min_y:max_y, min_x:max_x]
         x_indices = np.arange(min_x, max_x)
         y_indices = np.arange(min_y, max_y)
         if fig is None:
@@ -1034,6 +1014,60 @@ class WLBaseImage(image.LinacDicomImage):
         if show:
             fig.show()
         return fig
+
+    def _plotly_zoom_bounds(self) -> tuple[int, int, int, int]:
+        """Return pixel slice bounds as (left, right, top, bottom)."""
+        # Start with the BB centers. This also handles open-field
+        # images, which have no detected field boundaries to include.
+        bbs = [match.bb for match in self.arrangement_matches.values()]
+        left = min(bb.x for bb in bbs)
+        right = max(bb.x for bb in bbs)
+        top = min(bb.y for bb in bbs)
+        bottom = max(bb.y for bb in bbs)
+
+        # Extend the limits to include every matched field, for both regular
+        # and multi-target WL.
+        for boundary in self._plotly_field_boundaries():
+            field_y, field_x = np.nonzero(boundary)
+            if not field_x.size:
+                continue
+            left = min(left, field_x.min())
+            top = min(top, field_y.min())
+            right = max(right, field_x.max())
+            bottom = max(bottom, field_y.max())
+
+        # Add 20 mm of context beyond the outermost BBs/fields on each side.
+        margin = 20 * self.dpmm
+        left = int(left - margin)
+        right = int(right + margin)
+        top = int(top - margin)
+        bottom = int(bottom + margin)
+
+        # Keep slice bounds inside the image; negative starts would wrap around.
+        image_height, image_width = self.shape
+        left = max(0, left)
+        right = min(image_width, right)
+        top = max(0, top)
+        bottom = min(image_height, bottom)
+        return left, right, top, bottom
+
+    def _plotly_field_boundaries(self) -> list[np.ndarray]:
+        """Collect matched field boundaries from regular or multi-target analysis."""
+        # Regular WL finds its single field directly rather than using a locator.
+        boundaries = []
+        if self._field_boundary is not None:
+            boundaries.append(self._field_boundary)
+
+        # Grab just the field metrics (drop the BBs) and then get their boundaries
+        matched_fields = [match.field for match in self.arrangement_matches.values()]
+        for metric in self.metrics:
+            if isinstance(metric, GlobalSizedFieldLocator):
+                for center, boundary in zip(metric.fields, metric.boundaries):
+                    if any(
+                        center.distance_to(field) < 1e-6 for field in matched_fields
+                    ):
+                        boundaries.append(boundary)
+        return boundaries
 
     def _plotly_bb_and_field_overlays(self, fig: go.Figure) -> None:
         """Draw metric overlays with names and legend groups from the matched BBs."""
@@ -2005,10 +2039,14 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
     ) -> dict[str, go.Figure]:
         """Plot the analyzed images in a Plotly figure.
 
+        The combined beam's-eye-view (BEV) displacement figure overlays gantry,
+        collimator, couch, and EPID curves and their centroids. Displacements are
+        relative to the field center in the local imaging plane.
+
         Parameters
         ----------
         zoomed : bool
-            Whether to zoom in on the BBs of the 2D images.
+            Whether to crop around the BBs/fields. If False, show the entire image.
         show_legend : bool
             Whether to show the legend on the plot.
         show : bool
@@ -2156,12 +2194,12 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
         set_legend_bottom(iso_fig)
         figs["Isocenter Visualization"] = iso_fig
 
-        # polar plot and POV plots
-        for axis, start_angle, clock, marker_name in zip(
+        # combined BEV displacement plot
+        fig = go.Figure()
+        max_displacement = 0.0
+        for axis, color in zip(
             (Axis.GANTRY, Axis.COLLIMATOR, Axis.COUCH, Axis.EPID),
-            (90, 270, 270, 90),
-            ("clockwise", "counterclockwise", "counterclockwise", "clockwise"),
-            ("BB", "BB", "BB", "EPID"),
+            ("#636EFA", "#EF553B", "#00CC96", "#AB63FA"),
         ):
             if axis == Axis.EPID:
                 attr = "cax2epid_vector"
@@ -2183,81 +2221,70 @@ class WinstonLutz(ResultsDataMixin[WinstonLutzResult], QuaacMixin):
             xz_sag = np.array([getattr(img, attr).x for img in imgs])
             y_sag = np.array([getattr(img, attr).y for img in imgs])
             rss = np.sqrt(xz_sag**2 + y_sag**2)
-            rms = rss / np.sqrt(2)
+            max_displacement = max(max_displacement, float(rss.max()))
             # append the first point to the end to close the loop
             angles = np.append(angles, angles[0])
             xz_sag = np.append(xz_sag, xz_sag[0])
             y_sag = np.append(y_sag, y_sag[0])
-            rms = np.append(rms, rms[0])
             rss = np.append(rss, rss[0])
 
-            # X/Y POV plots
-            fig = go.Figure()
-            title = f"{axis.value} POV displacement"
             fig.add_scatter(
                 x=xz_sag,
-                y=y_sag,
+                # negative here due to screen coordinates (y+ out/down) vs IEC 61217 (y+ in/up)
+                y=-y_sag,
                 hovertext=[
                     f"Angle: {angle}\N{DEGREE SIGN}; Total: {r:.3f}mm"
                     for angle, r in zip(angles, rss)
                 ],
                 hoverinfo="text+x+y",
                 mode="lines+markers",
-                name=f"{marker_name} positions",
+                name=axis.value,
+                legendgroup=axis.value,
+                line_color=color,
+                marker=dict(color=color, symbol="circle"),
             )
+            fig.add_scatter(
+                x=[xz_sag.mean()],
+                # negative here due to screen coordinates (y+ out/down) vs IEC 61217 (y+ in/up)
+                y=[-y_sag.mean()],
+                hoverinfo="text+x+y",
+                hovertext=f"Displacement: {math.hypot(xz_sag.mean(), y_sag.mean()):.3f}mm",
+                name=f"{axis.value} Centroid",
+                mode="markers",
+                legendgroup=f"{axis.value} Centroid",
+                showlegend=True,
+                marker=dict(color=color, symbol="diamond", size=10),
+            )
+
+        if fig.data:
+            title = "BEV displacement view"
+            limit = max_displacement * 1.1 if max_displacement > 1 else 1.0
             fig.add_scatter(
                 x=[0],
                 y=[0],
                 name="Field Center",
                 mode="markers",
-            )
-            fig.add_scatter(
-                x=[xz_sag.mean()],
-                y=[y_sag.mean()],
-                hoverinfo="text+x+y",
-                hovertext=f"Displacement: {math.hypot(xz_sag.mean(), y_sag.mean()):.3f}mm",
-                name=f"{marker_name} Centroid",
-                mode="markers",
+                marker=dict(color="black", symbol="cross", size=10),
             )
             add_title(fig, title)
             set_legend_bottom(fig)
-            add_vertical_line(fig, 0, "black", name="y=0")
-            add_horizontal_line(fig, 0, "black", name="x=0")
+            add_vertical_line(fig, 0, "black", name="x=0")
+            add_horizontal_line(fig, 0, "black", name="y=0")
+            # Equal aspect scaling can shrink the axes within the figure paper.
+            fig.update_shapes(selector=dict(name="x=0"), yref="y domain")
+            fig.update_shapes(selector=dict(name="y=0"), xref="x domain")
             fig.update_layout(
                 showlegend=show_legend,
-                xaxis_title="X (+Left) (mm)",
+                legend_groupclick="toggleitem",
+                xaxis_title="Local X (+Right) (mm)",
                 yaxis_title="Y (+In) (mm)",
                 xaxis_scaleanchor="y",
-            )
-            figs[title] = fig
-
-            # polar plots
-            fig = go.Figure()
-            title = f"In-plane {axis.value} displacement"
-            for name, data in zip(
-                ["Y-axis (In/Out)", "X/Z-axis (Gantry plane)", "RMS", "RSS"],
-                [y_sag, xz_sag, rms, rss],
-            ):
-                fig.add_scatterpolar(
-                    r=data,
-                    theta=angles,
-                    name=name,
-                )
-            add_title(fig, title)
-            set_legend_bottom(fig)
-            fig.update_layout(
-                showlegend=show_legend,
-                polar=dict(
-                    angularaxis=dict(rotation=start_angle, direction=clock),
-                    radialaxis=dict(title="Displacement from Field (mm)", visible=True),
-                ),
-            )
-            # add 0-value highlight
-            fig.add_scatterpolar(
-                r=[0] * 100,
-                theta=np.linspace(0, 360, 100),
-                mode="lines",
-                name="0-line",
+                xaxis_range=[-limit, limit],
+                yaxis_range=[-limit, limit],
+                xaxis_autorange=False,
+                yaxis_autorange=False,
+                xaxis_constrain="domain",
+                yaxis_constrain="domain",
             )
             figs[title] = fig
 
@@ -3274,7 +3301,7 @@ class WinstonLutzMultiTargetMultiField(WinstonLutz):
         Parameters
         ----------
         zoomed : bool
-            Whether to zoom in on the 2D image plots.
+            Whether to crop around the BBs/fields. If False, show the entire image.
         show : bool
             Whether to show the plot.
         show_colorbar : bool
