@@ -3,6 +3,15 @@
 Plan: [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md).
 Human decisions: [HUMAN_TASKS.md](HUMAN_TASKS.md).
 
+## Pilot Center Hardware Guide: 2026-11-11
+
+- [x] Create [Pylinac_Pilot_Center_Hardware_Guide.pdf](Pylinac_Pilot_Center_Hardware_Guide.pdf)
+      with a single-user hardware starting point, larger-workload guidance and
+      performance and clinical-workflow caveats.
+- [x] Use the existing ReportLab installation without changing application code.
+
+No tests, builds, linters, benchmarks, PDF content checks or screenshots were run.
+
 The shared renderer and Picket Fence pilot are implemented. On 2026-10-13 the
 human confirmed that Picket Fence custom PDF generation was tested and approved,
 including the pilot design. Wider module rollout is now authorized and in progress.
@@ -270,8 +279,8 @@ No tests, builds, linters or screenshots were run for this revision.
 ## Rollout Summary
 
 - 47 concrete imaging analyses and all nine nuclear medicine analyses have
-      detailed-report adapters: 56 analyses in total. Nuclear API execution and
-      human acceptance remain pending.
+  detailed-report adapters: 56 analyses in total. Nuclear API execution and
+  human acceptance remain pending.
 - 31 imaging analyses generated standard and branded reports: 62 PDFs in total.
 - 8 nuclear analyses generated 22 standard/branded PDFs directly through the
   existing shared renderer; SimpleSensitivity awaits confirmed source activity.
