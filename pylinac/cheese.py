@@ -4,11 +4,13 @@ import io
 import webbrowser
 from collections.abc import Callable
 from pathlib import Path
+from typing import Literal
 
 import numpy as np
 from matplotlib import pyplot as plt
 from plotly import graph_objects as go
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field
+from scipy.stats import linregress
 
 from .core import pdf
 from .core.plotly_utils import add_title
@@ -86,6 +88,84 @@ class CheeseResult(ResultBase):
     rois: dict[str, dict[str, int | float]] = Field(
         description="A dictionary of measured ROIs.", title="ROI data"
     )
+
+
+class CIRSInsertReference(BaseModel):
+    """Optional, user-supplied identity and reference values for one insert.
+
+    Density is not inferred from CT number. A tolerance is an absolute CT number
+    difference in HU and requires an expected CT number.
+    """
+
+    model_config = ConfigDict(extra="allow", allow_inf_nan=False)
+
+    material: str | None = Field(default=None, title="Supplied insert material")
+    density: float | None = Field(default=None, ge=0, title="Supplied density")
+    expected_hu: float | None = Field(default=None, title="Reference CT number (HU)")
+    tolerance_hu: float | None = Field(
+        default=None, ge=0, title="Supplied CT number tolerance (HU)"
+    )
+
+
+class CIRSInsertResult(BaseModel):
+    """Additional sampling statistics and optional comparisons for one insert."""
+
+    material: str | None = Field(title="Supplied material")
+    density: float | None = Field(title="Supplied density")
+    mean: float = Field(title="Mean CT number (HU)")
+    minimum: float = Field(title="Minimum CT number (HU)")
+    maximum: float = Field(title="Maximum CT number (HU)")
+    percentile_5: float = Field(title="5th percentile CT number (HU)")
+    percentile_95: float = Field(title="95th percentile CT number (HU)")
+    pixel_count: int = Field(title="Sampled pixels")
+    sampled_area_mm2: float = Field(title="Sampled area (square mm)")
+    diameter_mm: float = Field(title="Sampling diameter (mm)")
+    expected_hu: float | None = Field(title="Reference CT number (HU)")
+    tolerance_hu: float | None = Field(title="Supplied tolerance (HU)")
+    difference_hu: float | None = Field(title="Median minus reference (HU)")
+    within_tolerance: bool | None = Field(title="Within supplied tolerance")
+    reference_difference_hu: float | None = Field(
+        title="Median difference from selected reference insert (HU)"
+    )
+    cnr: float | None = Field(title="Contrast-to-noise ratio (pooled pixel SD)")
+    fitted_hu: float | None = Field(title="Fitted CT number (HU)")
+    fit_residual_hu: float | None = Field(title="Measured minus fitted CT number (HU)")
+
+
+class CIRSDensityFit(BaseModel):
+    """Descriptive straight-line fit of supplied density to median CT number."""
+
+    density_type: str = Field(title="Supplied density type")
+    density_units: str = Field(title="Density units")
+    number_of_points: int = Field(title="Configured inserts")
+    distinct_densities: int = Field(title="Distinct supplied densities")
+    status: str = Field(title="Fit availability")
+    slope: float | None = Field(default=None, title="Slope (HU per density unit)")
+    intercept: float | None = Field(default=None, title="Intercept (HU)")
+    r_squared: float | None = Field(default=None, title="Coefficient of determination")
+    rmse_hu: float | None = Field(default=None, title="Fit root mean square residual (HU)")
+    maximum_absolute_residual_hu: float | None = Field(
+        default=None, title="Maximum absolute fit residual (HU)"
+    )
+
+
+class CIRS062MResult(CheeseResult):
+    """CIRS insert measurements, supplied references and acquisition provenance.
+
+    The inherited ``rois`` measurements retain their original keys and units.
+    Additional statistics do not identify materials or establish acceptance limits.
+    """
+
+    insert_measurements: dict[str, CIRSInsertResult] = Field(
+        title="Additional insert measurements and supplied references"
+    )
+    density_fit: CIRSDensityFit | None = Field(title="Density and CT number relationship")
+    reference_roi: str | None = Field(title="Selected reference insert")
+    acquisition: dict[str, str | int | float | None] = Field(title="Scan acquisition")
+    analysis_settings: dict[str, str | int | float | None] = Field(
+        title="Analysis and sampling settings"
+    )
+    measurement_notes: list[str] = Field(title="Measurement scope and interpretation")
 
 
 class CheeseModule(CatPhanModule):
@@ -300,6 +380,13 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
     def _roi_angles(self) -> list[float]:
         return [wrap360(s["angle"]) for s in self.module_class.roi_settings.values()]
 
+    def _density_roi_config(self) -> dict[str, dict]:
+        return {
+            name: values
+            for name, values in (self.roi_config or {}).items()
+            if values.get("density") is not None
+        }
+
     def _ensure_physical_scan_extent(self) -> bool:
         """The cheese phantom only has one module."""
         return True
@@ -373,10 +460,10 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
         }
 
         # density curve (if densities passed)
-        if self.roi_config:
+        if self._density_roi_config():
             xs = []
             ys = []
-            for roi_num, roi_data in self.roi_config.items():
+            for roi_num, roi_data in self._density_roi_config().items():
                 xs.append(roi_data["density"])
                 ys.append(self.module.rois[roi_num].pixel_value)
             # sort by HU so it looks like a normal curve; ROI densities can be out of order
@@ -420,6 +507,94 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
         if show:
             plt.show()
 
+    def plot_roi_values(
+        self, show: bool = True, *, color: str | None = None, **plt_kwargs: dict
+    ) -> None:
+        """Plot the CT number and pixel variation of every measured insert.
+
+        Parameters
+        ----------
+        show : bool
+            Whether to display the figure.
+        color : str, optional
+            Colour of the CT number and pixel-variation series.
+        plt_kwargs : dict
+            Keyword arguments passed to :func:`matplotlib.pyplot.subplots`.
+        """
+        figure, axes = plt.subplots(2, 1, sharex=True, **plt_kwargs)
+        names = list(self.module.rois)
+        positions = np.arange(len(names))
+        medians = [roi.pixel_value for roi in self.module.rois.values()]
+        means = [roi.mean for roi in self.module.rois.values()]
+        deviations = [roi.std for roi in self.module.rois.values()]
+        axes[0].errorbar(
+            positions, means, yerr=deviations, fmt="o", capsize=3,
+            label="Mean and pixel standard deviation", color=color,
+        )
+        axes[0].scatter(positions, medians, marker="x", label="Median", color="black")
+        axes[0].set_ylabel("CT number (HU)")
+        axes[0].set_title("CT number by insert")
+        axes[0].legend(fontsize="small")
+        axes[1].bar(positions, deviations, color=color)
+        axes[1].set_ylabel("Pixel standard deviation (HU)")
+        axes[1].set_xlabel("Insert number")
+        axes[1].set_xticks(positions, names)
+        for axis in axes:
+            axis.grid(axis="y", alpha=0.3)
+        figure.tight_layout()
+        if show:
+            plt.show()
+
+    def plot_roi_images(
+        self, show: bool = True, **plt_kwargs: dict
+    ) -> dict[str, plt.Figure]:
+        """Plot numbered close-ups of every insert with its sampling boundary.
+
+        Parameters
+        ----------
+        show : bool
+            Whether to display the figures.
+        plt_kwargs : dict
+            Keyword arguments passed to :func:`matplotlib.pyplot.subplots`.
+
+        Returns
+        -------
+        dict
+            Named figures with up to six insert views each. All views use the
+            same CT number window and retain image-coordinate pixel positions.
+        """
+        figures = {}
+        inserts = list(self.module.rois.items())
+        values = np.concatenate([roi.pixel_values for _, roi in inserts])
+        window = (float(np.min(values)), float(np.max(values)))
+        options = {"figsize": (8, 10), **plt_kwargs}
+        for start in range(0, len(inserts), 6):
+            figure, axes = plt.subplots(3, 2, **options)
+            selection = inserts[start : start + 6]
+            for axis, (name, roi) in zip(axes.flat, selection):
+                axis.imshow(
+                    self.module.image.array, cmap="gray", vmin=window[0], vmax=window[1]
+                )
+                roi.plot2axes(axis, edgecolor="blue")
+                margin = roi.radius * 1.8
+                axis.set_xlim(roi.center.x - margin, roi.center.x + margin)
+                axis.set_ylim(roi.center.y + margin, roi.center.y - margin)
+                axis.set_title(
+                    f"Insert {name}\nMedian {roi.pixel_value:.1f} HU; SD {roi.std:.1f} HU",
+                    fontsize=10,
+                )
+                axis.set_xlabel("Image horizontal coordinate (pixels)", fontsize=8)
+                axis.set_ylabel("Image vertical coordinate (pixels)", fontsize=8)
+                axis.tick_params(labelsize=8)
+            for axis in list(axes.flat)[len(selection) :]:
+                axis.set_visible(False)
+            figure.tight_layout()
+            title = f"Insert sampling close-ups: {selection[0][0]} to {selection[-1][0]}"
+            figures[title] = figure
+        if show:
+            plt.show()
+        return figures
+
     def results(self, as_list: bool = False) -> str | list[str]:
         """Return the results of the analysis as a string. Use with print().
 
@@ -441,23 +616,28 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
         else:
             return "\n".join(results)
 
-    def plot_density_curve(self, show: bool = True, **plt_kwargs: dict):
+    def plot_density_curve(
+        self, show: bool = True, *, color: str | None = None, **plt_kwargs: dict
+    ) -> None:
         """Plot the densities of the ROIs vs the measured HU. This will sort the ROIs by measured HU before plotting.
 
         Parameters
         ----------
         show : bool
             Whether to plot the image or not.
+        color : str, optional
+            Colour of the measured density series.
         plt_kwargs : dict
             Keyword args passed to the plt.figure() method. Allows one to set things like figure size.
         """
-        if not self.roi_config:
+        density_config = self._density_roi_config()
+        if not density_config:
             raise ValueError(
                 "No ROI density configuration was passed to the analyze method. Re-analyze with densities first."
             )
         xs = []
         ys = []
-        for roi_num, roi_data in self.roi_config.items():
+        for roi_num, roi_data in density_config.items():
             xs.append(roi_data["density"])
             ys.append(self.module.rois[roi_num].pixel_value)
         # sort by HU so it looks like a normal curve; ROI densities can be out of order
@@ -466,7 +646,7 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
         ys = np.array(ys)[sorted_args]
         # plot
         fig, ax = plt.subplots(**plt_kwargs)
-        ax.plot(xs, ys, linestyle="-.", marker="D")
+        ax.plot(xs, ys, linestyle="-.", marker="D", color=color)
         ax.set_title("Density vs HU curve")
         ax.set_ylabel("HU")
         ax.set_xlabel("Density")
@@ -526,18 +706,77 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
             Full report identity, used only for detailed reports.
         """
         if detailed:
-            from .core.reporting import ReportField, publish_analysis_report
+            from .core.reporting import (
+                ReportBranding,
+                ReportField,
+                ReportTableLabels,
+                publish_analysis_report,
+            )
 
-            plots = {"Analysed phantom image": lambda: self.plot_analyzed_image(show=False)}
-            if self.roi_config:
-                plots["Density and CT number curve"] = lambda: self.plot_density_curve(show=False)
+            report_branding = (
+                branding if isinstance(branding, ReportBranding)
+                else ReportBranding.model_validate(branding or {})
+            )
+            chart_color = report_branding.chart_color or report_branding.primary_color
+            plots = {
+                "Analysed phantom image": lambda: self.plot_analyzed_image(show=False),
+                "CT numbers and pixel variation": lambda: self.plot_roi_values(show=False, color=chart_color),
+                "Insert sampling close-ups": lambda: self.plot_roi_images(show=False),
+            }
+            if self._density_roi_config():
+                plots["Density and CT number curve"] = lambda: self.plot_density_curve(show=False, color=chart_color)
+            if isinstance(self, CIRS062M):
+                plots["Insert CT number distributions"] = lambda: self.plot_roi_distributions(show=False, color=chart_color)
+            fields = {
+                ("origin_slice",): ReportField("Reference scan image number", numbered=True),
+                ("phantom_roll",): ReportField("Phantom rotation (degrees)", decimal_places=2),
+                ("rois",): ReportField("Insert CT number measurements"),
+                ("rois", "*", "center_x"): ReportField("Image horizontal coordinate (pixels)"),
+                ("rois", "*", "center_y"): ReportField("Image vertical coordinate (pixels)"),
+                ("rois", "*", "diameter"): ReportField("Sampling diameter (pixels)"),
+                ("rois", "*", "median"): ReportField("Median CT number (HU)"),
+                ("rois", "*", "std"): ReportField("Pixel standard deviation (HU)"),
+                ("insert_measurements", "*", "within_tolerance"): ReportField(
+                    "Within supplied tolerance", missing_label="Not evaluated"
+                ),
+            }
+            if isinstance(self, CIRS062M):
+                fields.update({
+                    ("acquisition", name): ReportField(label)
+                    for name, label in {
+                        "tube_voltage_kv": "Tube voltage (kV)",
+                        "slice_thickness_mm": "Nominal slice thickness (mm)",
+                        "slice_spacing_mm": "Scan image spacing (mm)",
+                        "rescale_units": "DICOM rescale units",
+                    }.items()
+                })
             publish_analysis_report(
                 self.results_data(), filename, title=f"{self.model} Phantom Analysis",
                 context={"Phantom model": self.model, "Number of scan images": self.num_images},
                 scan_images=[Path(img.path).name for img in self.dicom_stack],
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
-                fields={("origin_slice",): ReportField("Reference scan image number", numbered=True),
-                        ("phantom_roll",): ReportField("Phantom rotation (degrees)", decimal_places=1)},
+                fields=fields,
+                table_labels={
+                    "rois": ReportTableLabels(
+                        row_heading="Insert", series_heading="Insert",
+                        row_labels={name: f"Insert {name}" for name in self.module.rois},
+                        column_labels={
+                            "center_x": "Image horizontal coordinate (pixels)",
+                            "center_y": "Image vertical coordinate (pixels)",
+                            "diameter": "Sampling diameter (pixels)",
+                            "median": "Median CT number (HU)",
+                            "std": "Pixel standard deviation (HU)",
+                        },
+                    ),
+                    "insert_measurements": ReportTableLabels(
+                        row_heading="Insert", series_heading="Insert",
+                        row_labels={name: f"Insert {name}" for name in self.module.rois},
+                        column_labels={
+                            name: definition.title or name
+                            for name, definition in CIRSInsertResult.model_fields.items()
+                        },
+                    ),
+                },
                 plots=plots, open_file=open_file,
             )
             return
@@ -745,6 +984,296 @@ class CIRS062M(CheesePhantomBase):
     roi_config: dict
     module_class = CIRSHUModule
     module: CIRSHUModule
+    _insert_references: dict[str, CIRSInsertReference]
+    _density_type: str
+    _reference_roi: str | None
+
+    def analyze(
+        self,
+        roi_config: dict | None = None,
+        x_adjustment: float = 0,
+        y_adjustment: float = 0,
+        angle_adjustment: float = 0,
+        roi_size_factor: float = 1,
+        scaling_factor: float = 1,
+        origin_slice: int | None = None,
+        *,
+        density_type: Literal["unspecified", "mass", "relative_electron"] = "unspecified",
+        reference_roi: str | None = None,
+    ) -> None:
+        """Analyze all 17 inserts, with optional supplied reference measurements.
+
+        Parameters
+        ----------
+        roi_config : dict, optional
+            Insert numbers as string keys. Each value may contain ``material``,
+            ``density``, ``expected_hu`` and ``tolerance_hu``. Interchangeable plug
+            identities and densities must match the scanned arrangement.
+            CT number comparisons use the measured median and an inclusive
+            absolute tolerance; a tolerance requires ``expected_hu``.
+        x_adjustment, y_adjustment : float
+            Image-coordinate phantom-center adjustments in mm, as described in
+            :meth:`CheesePhantomBase.analyze`.
+        angle_adjustment : float
+            Clockwise phantom rotation adjustment in degrees.
+        roi_size_factor, scaling_factor : float
+            Positive sampling-size and insert-position scale factors.
+        origin_slice : int, optional
+            Zero-based scan image index, otherwise detected automatically.
+        density_type : {"unspecified", "mass", "relative_electron"}
+            Meaning of the supplied density values. Mass densities must be in
+            g/cm3; relative electron densities use water = 1. The default does
+            not infer density type or units from the values.
+        reference_roi : str, optional
+            Explicitly selected insert for CT number differences and CNR. CNR
+            uses the absolute median difference divided by the root mean square
+            of the two pixel standard deviations. Zero denominator gives no CNR.
+            Selecting an insert does not identify it as water or uniform material.
+        """
+        if density_type not in {"unspecified", "mass", "relative_electron"}:
+            raise ValueError("Density type must be unspecified, mass or relative_electron.")
+        if reference_roi is not None and reference_roi not in self.module_class.roi_settings:
+            raise ValueError("The reference insert must be a string from '1' to '17'.")
+        references = {}
+        for name, values in (roi_config or {}).items():
+            if name not in self.module_class.roi_settings:
+                raise ValueError(f"Unknown CIRS insert {name!r}; use strings '1' to '17'.")
+            reference = CIRSInsertReference.model_validate(values)
+            if reference.tolerance_hu is not None and reference.expected_hu is None:
+                raise ValueError(f"Insert {name}: a tolerance requires a reference CT number.")
+            references[name] = reference
+        for label, value in (
+            ("x_adjustment", x_adjustment), ("y_adjustment", y_adjustment),
+            ("angle_adjustment", angle_adjustment),
+            ("roi_size_factor", roi_size_factor), ("scaling_factor", scaling_factor),
+        ):
+            if not np.isfinite(value):
+                raise ValueError(f"{label} must be finite.")
+        if roi_size_factor <= 0 or scaling_factor <= 0:
+            raise ValueError("ROI size and position scale factors must be positive.")
+        if origin_slice is not None and (
+            isinstance(origin_slice, bool)
+            or not isinstance(origin_slice, (int, np.integer))
+            or not 0 <= origin_slice < self.num_images
+        ):
+            raise ValueError("The origin slice must be a zero-based index within the scan.")
+        spacing = self.dicom_stack.metadata.PixelSpacing
+        if any(not np.isfinite(float(value)) or float(value) <= 0 for value in spacing):
+            raise ValueError("Pixel spacing must contain finite positive values.")
+        if not np.isclose(float(spacing[0]), float(spacing[1]), rtol=1e-5, atol=1e-8):
+            raise ValueError("CIRS circular insert sampling requires equal row and column pixel spacing.")
+        self._insert_references = references
+        self._density_type = density_type
+        self._reference_roi = reference_roi
+        super().analyze(
+            roi_config={
+                name: values.model_dump(exclude_none=True)
+                for name, values in references.items()
+            } if roi_config is not None else None,
+            x_adjustment=x_adjustment, y_adjustment=y_adjustment,
+            angle_adjustment=angle_adjustment, roi_size_factor=roi_size_factor,
+            scaling_factor=scaling_factor, origin_slice=origin_slice,
+        )
+        height, width = self.module.image.array.shape
+        for name, roi in self.module.rois.items():
+            if (
+                roi.center.x - roi.radius < 0 or roi.center.x + roi.radius >= width
+                or roi.center.y - roi.radius < 0 or roi.center.y + roi.radius >= height
+            ):
+                raise ValueError(f"Insert {name} extends outside the image; check localization and sampling size.")
+            if roi.pixel_values.size == 0:
+                raise ValueError(f"Insert {name} contains no sampled pixels; increase the ROI size.")
+
+    def plot_density_curve(
+        self, show: bool = True, *, color: str | None = None, **plt_kwargs: dict
+    ) -> None:
+        """Plot supplied densities, measured median CT numbers and fit residuals.
+
+        Parameters
+        ----------
+        show : bool
+            Whether to display the figure.
+        color : str, optional
+            Colour of the measured data and residuals.
+        plt_kwargs : dict
+            Keyword arguments passed to :func:`matplotlib.pyplot.subplots`.
+        """
+        fit = self._density_fit()
+        if fit is None:
+            raise ValueError("No insert densities were supplied to analyze().")
+        configuration = self._density_roi_config()
+        names = list(configuration)
+        densities = np.array([values["density"] for values in configuration.values()])
+        measured = np.array([self.module.rois[name].pixel_value for name in names])
+        figure, axes = plt.subplots(2, 1, **plt_kwargs)
+        axes[0].scatter(densities, measured, color=color, label="Measured median")
+        for name, density, value in zip(names, densities, measured):
+            axes[0].annotate(name, (density, value), xytext=(4, 4), textcoords="offset points", fontsize=8)
+        if fit.slope is not None and fit.intercept is not None:
+            ordered = np.argsort(densities)
+            fitted = fit.slope * densities + fit.intercept
+            axes[0].plot(densities[ordered], fitted[ordered], color="black", linestyle="--", label="Descriptive linear fit")
+            axes[1].bar(names, measured - fitted, color=color)
+            axes[1].axhline(0, color="black", linewidth=0.8)
+        else:
+            axes[1].text(0.5, 0.5, fit.status, ha="center", va="center", wrap=True, transform=axes[1].transAxes)
+        axes[0].set_title("Density and CT number relationship")
+        axes[0].set_xlabel(f"{fit.density_type.capitalize()} density ({fit.density_units})")
+        axes[0].set_ylabel("Median CT number (HU)")
+        axes[0].legend(fontsize="small")
+        axes[1].set_xlabel("Insert number")
+        axes[1].set_ylabel("Measured minus fitted (HU)")
+        for axis in axes:
+            axis.grid(axis="y", alpha=0.3)
+        figure.tight_layout()
+        if show:
+            plt.show()
+
+    def plot_roi_distributions(
+        self, show: bool = True, *, color: str | None = None, **plt_kwargs: dict
+    ) -> dict[str, plt.Figure]:
+        """Plot sampled pixel distributions without assuming insert homogeneity.
+
+        Parameters
+        ----------
+        show : bool
+            Whether to display the figures.
+        color : str, optional
+            Histogram colour.
+        plt_kwargs : dict
+            Keyword arguments passed to :func:`matplotlib.pyplot.subplots`.
+
+        Returns
+        -------
+        dict
+            Named figures with up to six insert histograms each.
+        """
+        figures = {}
+        inserts = list(self.module.rois.items())
+        options = {"figsize": (8, 10), **plt_kwargs}
+        for start in range(0, len(inserts), 6):
+            figure, axes = plt.subplots(3, 2, **options)
+            selection = inserts[start : start + 6]
+            for axis, (name, roi) in zip(axes.flat, selection):
+                axis.hist(roi.pixel_values, bins="auto", color=color)
+                axis.axvline(roi.pixel_value, color="black", linestyle="--", label="Median")
+                axis.set_title(f"Insert {name}", fontsize=10)
+                axis.set_xlabel("CT number (HU)", fontsize=8)
+                axis.set_ylabel("Sampled pixels", fontsize=8)
+                axis.tick_params(labelsize=8)
+                axis.legend(fontsize=7)
+            for axis in list(axes.flat)[len(selection) :]:
+                axis.set_visible(False)
+            figure.tight_layout()
+            figures[f"Insert CT number distributions: {selection[0][0]} to {selection[-1][0]}"] = figure
+        if show:
+            plt.show()
+        return figures
+
+    def _density_fit(self) -> CIRSDensityFit | None:
+        configuration = self._density_roi_config()
+        if not configuration:
+            return None
+        densities = np.array([values["density"] for values in configuration.values()], dtype=float)
+        ct_numbers = np.array([self.module.rois[name].pixel_value for name in configuration])
+        units = {
+            "unspecified": "Not specified",
+            "mass": "g/cm3",
+            "relative_electron": "Relative to water = 1",
+        }
+        result = CIRSDensityFit(
+            density_type=self._density_type.replace("_", " "),
+            density_units=units[self._density_type],
+            number_of_points=len(densities), distinct_densities=len(np.unique(densities)),
+            status="Not fitted: at least two distinct supplied densities are required.",
+        )
+        if result.distinct_densities < 2:
+            return result
+        fit = linregress(densities, ct_numbers)
+        residuals = ct_numbers - (fit.slope * densities + fit.intercept)
+        result.slope = float(fit.slope)
+        result.intercept = float(fit.intercept)
+        result.r_squared = float(fit.rvalue**2) if np.ptp(ct_numbers) > 0 else None
+        result.rmse_hu = float(np.sqrt(np.mean(residuals**2)))
+        result.maximum_absolute_residual_hu = float(np.max(np.abs(residuals)))
+        result.status = "Descriptive least-squares fit of median CT number against supplied density."
+        if len(densities) == 2:
+            result.status += " Two points determine a line; fit quality is not independently assessed."
+        return result
+
+    def _generate_results_data(self) -> CIRS062MResult:
+        base = super()._generate_results_data()
+        fit = self._density_fit()
+        reference_roi = self.module.rois.get(self._reference_roi)
+        measurements = {}
+        for name, roi in self.module.rois.items():
+            reference = self._insert_references.get(name, CIRSInsertReference())
+            percentiles = np.percentile(roi.pixel_values, [5, 95])
+            difference = roi.pixel_value - reference.expected_hu if reference.expected_hu is not None else None
+            reference_difference = roi.pixel_value - reference_roi.pixel_value if reference_roi is not None else None
+            pooled_noise = float(np.hypot(roi.std, reference_roi.std) / np.sqrt(2)) if reference_roi is not None else 0
+            fitted_hu = (
+                fit.slope * reference.density + fit.intercept
+                if fit is not None and fit.slope is not None
+                and fit.intercept is not None and reference.density is not None
+                else None
+            )
+            measurements[name] = CIRSInsertResult(
+                material=reference.material, density=reference.density,
+                mean=roi.mean, minimum=roi.min, maximum=roi.max,
+                percentile_5=float(percentiles[0]), percentile_95=float(percentiles[1]),
+                pixel_count=int(roi.pixel_values.size),
+                sampled_area_mm2=float(roi.pixel_values.size * self.mm_per_pixel**2),
+                diameter_mm=float(2 * roi.radius * self.mm_per_pixel),
+                expected_hu=reference.expected_hu, tolerance_hu=reference.tolerance_hu,
+                difference_hu=difference,
+                within_tolerance=abs(difference) <= reference.tolerance_hu
+                if difference is not None and reference.tolerance_hu is not None else None,
+                reference_difference_hu=reference_difference,
+                cnr=abs(reference_difference) / pooled_noise
+                if reference_difference is not None and pooled_noise > 0 else None,
+                fitted_hu=fitted_hu,
+                fit_residual_hu=roi.pixel_value - fitted_hu if fitted_hu is not None else None,
+            )
+        metadata = self.dicom_stack[self.origin_slice].metadata
+        acquisition = {
+            "manufacturer": getattr(metadata, "Manufacturer", None),
+            "scanner_model": getattr(metadata, "ManufacturerModelName", None),
+            "modality": getattr(metadata, "Modality", None),
+            "tube_voltage_kv": float(metadata.KVP) if getattr(metadata, "KVP", None) not in (None, "") else None,
+            "image_rows": int(metadata.Rows), "image_columns": int(metadata.Columns),
+            "row_spacing_mm": float(metadata.PixelSpacing[0]),
+            "column_spacing_mm": float(metadata.PixelSpacing[1]),
+            "slice_thickness_mm": float(metadata.SliceThickness),
+            "slice_spacing_mm": float(self.dicom_stack.slice_spacing),
+            "rescale_slope": float(getattr(metadata, "RescaleSlope", 1)),
+            "rescale_intercept": float(getattr(metadata, "RescaleIntercept", 0)),
+            "rescale_units": getattr(metadata, "RescaleType", None),
+            "reconstruction_kernel": str(metadata.ConvolutionKernel) if "ConvolutionKernel" in metadata else None,
+        }
+        return CIRS062MResult(
+            **base.model_dump(), insert_measurements=measurements, density_fit=fit,
+            reference_roi=self._reference_roi, acquisition=acquisition,
+            analysis_settings={
+                "x_adjustment_mm": float(self.x_adjustment),
+                "y_adjustment_mm": float(self.y_adjustment),
+                "angle_adjustment_degrees": float(self.angle_adjustment),
+                "roi_size_factor": float(self.roi_size_factor),
+                "position_scaling_factor": float(self.scaling_factor),
+                "phantom_center_x_pixels": float(self.module.phan_center.x),
+                "phantom_center_y_pixels": float(self.module.phan_center.y),
+                "density_type": self._density_type.replace("_", " "),
+                "comparison_statistic": "Median CT number",
+            },
+            measurement_notes=[
+                "Insert identities and densities are supplied, not inferred from CT number.",
+                "Pixel standard deviation includes noise, material structure, partial volume and artifacts; it is not a standalone scanner-noise or uniformity measurement.",
+                "An insert is evaluated only when both its reference CT number and tolerance are supplied.",
+                "The density fit describes the supplied points; it is not an automatically commissioned density conversion.",
+                "Spatial resolution, slice-thickness accuracy and dose are not measured by this insert analysis.",
+                "Stored DICOM rescaling is retained without water or air correction. Missing rescale units are not independently verified.",
+            ],
+        )
 
     @classmethod
     def from_demo_images(cls):
