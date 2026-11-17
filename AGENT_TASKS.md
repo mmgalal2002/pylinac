@@ -3,6 +3,41 @@
 Plan: [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md).
 Human decisions: [HUMAN_TASKS.md](HUMAN_TASKS.md).
 
+## CIRS062M Correction: 2026-11-17
+
+- [x] Identify the legacy PDF call in the supplied workflow and request the
+      existing detailed renderer explicitly.
+- [x] Add an all-insert CT number and pixel-variation chart, with explicit HU,
+      pixel-coordinate and sampling-diameter labels in detailed reports.
+- [x] Add per-insert mean, extrema, percentiles, pixel count, physical sampling
+      area/diameter, acquisition and analysis settings, close-ups and histograms.
+- [x] Add explicit material/density/reference configuration, optional median-HU
+      comparisons, selected-reference CNR and descriptive density fitting with
+      residuals. Missing references are not evaluated; no material map is guessed.
+- [x] Generate corrected standard and branded detailed reports and a new JSON
+      export from the supplied local archive, preserving the previous exports.
+- [x] Document the API, measured quantities and acquisition/interpretation limits.
+- [ ] Run required `prek` and documentation build when their tooling is available.
+
+Input: `E:\Github\CTQA\Phantoms\CHEESE PYLINAC\CIRs062M.zip`, 28,200,218 bytes,
+SHA-256 `FD2B467EB537DD50A8B164E71EA3891FE254F37A59D92D94D122137517D6D0C2`.
+The archive contains 264 Elekta XVI CT images, 410 by 410 pixels, with 1 mm
+pixel spacing and slice thickness. No material/density assignment or acceptance
+limits were supplied. Preserve the previous PDF and result record.
+
+Outputs are `CIRS062M_report.pdf`, `CIRS062M_report_branded.pdf` and
+`CIRS062M_results_detailed.json` in the supplied folder. The script selects the
+updated source explicitly, supports analysis/branding configuration and records
+the input archive size and checksum in report metadata. All 17 original median
+measurements, origin slice 132 and roll -1.3060686015831138 degrees were retained.
+Insert 9 has pixel SD 700.2572886860584 HU; insert/image review remains human-owned.
+
+Both PDFs were generated through the public API. Syntax and editor diagnostics
+were checked; no test suite, screenshots or dependency installation was performed.
+Density/reference/CNR options were implemented but not exercised with invented
+references on this scan. Required `uv`, `uvx` and `prek` tools are unavailable.
+Human wording, layout, insert assignment and measurement acceptance remain pending.
+
 ## Pilot Center Hardware Guide: 2026-11-11
 
 - [x] Create [Pylinac_Pilot_Center_Hardware_Guide.pdf](Pylinac_Pilot_Center_Hardware_Guide.pdf)
@@ -406,7 +441,7 @@ execution or acceptance of those methods using the earlier PDFs.
 | CatPhan604                       | Implemented       | Standard and branded                                  | Pending          |
 | CatPhan700                       | Implemented       | Awaiting matching input                               | Pending          |
 | TomoCheese                       | Implemented       | Standard and branded                                  | Pending          |
-| CIRS062M                         | Implemented       | Awaiting matching input                               | Pending          |
+| CIRS062M                         | Expanded          | Standard and branded; supplied 264-image XVI archive  | Pending          |
 | QuartDVT                         | Implemented       | Standard and branded                                  | Pending          |
 | HypersightQuartDVT               | Implemented       | Awaiting matching input                               | Pending          |
 | GECTQA                           | Implemented       | Standard and branded; profile warning retained        | Pending          |
