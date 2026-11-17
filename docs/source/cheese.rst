@@ -171,6 +171,113 @@ Adjusting ROI locations
 
 To adjust ROI locations, see the sister section for CT analysis: :ref:`adjusting-roi-locations`.
 
+CIRS 062M measurements and detailed reports
+-----------------------------------------
+
+:class:`~pylinac.cheese.CIRS062M` measures all 17 configured insert positions.
+The original ``rois`` results retain their median, pixel standard deviation and
+image-coordinate geometry. Additional results include the mean, minimum,
+maximum, 5th and 95th percentiles, sampled pixel count, sampled area in square
+millimetres and sampling diameter in millimetres. Scan acquisition and analysis
+settings are also included in :meth:`~pylinac.cheese.CIRS062M.results_data`.
+
+Generate a detailed report explicitly:
+
+.. code-block:: python
+
+  from pylinac import CIRS062M
+
+  phantom = CIRS062M.from_zip("CIRS062M.zip")
+  phantom.analyze()
+  phantom.publish_pdf(
+    "CIRS062M_detailed.pdf",
+    detailed=True,
+    branding={
+      "name": "Medical Physics",
+      "primary_color": "#165A70",
+      "chart_color": "#287A63",
+    },
+  )
+
+The report includes the numbered phantom image, CT number and pixel-variation
+charts, a close-up and pixel histogram for every insert, acquisition information,
+complete measurement tables and a full-precision JSON attachment. Close-ups
+retain image-coordinate pixel positions and use a common CT number window.
+Report metadata, notes, custom logos, branding and binary output streams use the
+same options as the other detailed reports. Existing calls without
+``detailed=True`` retain their legacy PDF layout.
+
+Supplying insert identities and references
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The plugs are interchangeable. Material identity, density and expected CT
+number cannot be determined reliably from their position or measured CT number.
+Supply the configuration for the actual scanned arrangement using ``roi_config``.
+Each insert key must be a string from ``"1"`` to ``"17"``. Supported entries are:
+
+* ``material``: the supplied material description.
+* ``density``: a finite, nonnegative density from the matching insert certificate.
+* ``expected_hu``: the reference CT number for the intended acquisition protocol.
+* ``tolerance_hu``: a finite, nonnegative absolute CT number tolerance. This
+  requires ``expected_hu``. The comparison uses the measured median and includes
+  the boundary: an absolute difference equal to the tolerance is within it.
+
+Entries may be omitted. An insert without both a reference CT number and a
+tolerance is not evaluated; its result is ``None``, not a pass. No overall
+phantom acceptance is inferred from individual insert comparisons.
+
+The ``density_type`` argument describes the supplied density values:
+
+* ``"mass"`` means mass density in g/cm3.
+* ``"relative_electron"`` means relative electron density, with water equal to 1.
+* ``"unspecified"`` is the default and does not infer a density type or unit.
+
+For example, load an independently prepared configuration rather than assigning
+materials from the measured scan:
+
+.. code-block:: python
+
+  import json
+  from pathlib import Path
+
+  configuration = json.loads(
+    Path("insert_configuration.json").read_text(encoding="utf-8")
+  )
+  phantom.analyze(**configuration)
+  phantom.plot_density_curve()
+
+The configuration is an object containing ``roi_config`` and, when applicable,
+``density_type``, ``reference_roi`` and the ordinary positioning adjustments.
+Only inserts with a supplied density appear on the density plot. At least two
+distinct densities are needed for a descriptive least-squares fit of median CT
+number against density. The result includes slope, intercept, coefficient of
+determination, root mean square residual and maximum absolute residual. The
+chart labels each insert and includes residuals. Two points define a line but
+do not independently assess its quality. A fitted relationship is not an
+automatically commissioned density conversion.
+
+An explicitly selected ``reference_roi`` enables median CT number differences
+and contrast-to-noise ratios. The CNR denominator is the root mean square of
+the two pixel standard deviations; a zero denominator gives no CNR. Selecting
+a reference does not identify it as water or prove that it is uniform.
+
+Interpretation and acquisition limits
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Pixel standard deviation includes noise, material structure, partial volume and
+artifacts. It is not a standalone scanner-noise or image-uniformity measurement.
+Use the insert image and histogram together when an insert has large variation.
+The analysis uses stored DICOM rescaling without forcing water to 0 or air to
+-1000. Missing DICOM rescale units are recorded as missing; the CT number scale
+is not independently established by those tags alone.
+
+Nominal DICOM slice thickness is acquisition metadata, not a measured
+slice-thickness accuracy result. This insert analysis does not measure spatial
+resolution, slice-thickness accuracy or dose. Circular sampling requires equal,
+finite, positive row and column pixel spacing. Out-of-image sampling regions,
+empty sampling regions, invalid reference indices and nonpositive scale factors
+are rejected.
+
 .. _extending_cheese_phantom:
 
 Extending for other phantoms
