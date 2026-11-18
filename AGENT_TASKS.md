@@ -3,6 +3,18 @@
 Plan: [PDF_REPORT_PLAN.md](PDF_REPORT_PLAN.md).
 Human decisions: [HUMAN_TASKS.md](HUMAN_TASKS.md).
 
+## CIRS nominal references: 2026-11-18
+
+- [x] Omit the individual DICOM filenames from the CIRS 062M detailed PDF.
+- [x] Add the Model 062 nominal specifications and catalog, approximate HU and
+      Model 062M density references to the result JSON and detailed PDF.
+- [x] Preserve the measurement values, supplied insert configuration and the
+      default PDF layout.
+- [x] Regenerate both exports from the matching 264-image archive. Compare all
+      17 inserts with the previous JSON, verify the PDF attachment against the
+      standalone JSON, and render and inspect the four nominal-reference pages.
+- [ ] Run `prek` and the documentation build when their tooling is available.
+
 ## CIRS062M Correction: 2026-11-17
 
 - [x] Identify the legacy PDF call in the supplied workflow and request the

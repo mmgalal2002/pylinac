@@ -12,6 +12,7 @@ from plotly import graph_objects as go
 from pydantic import BaseModel, ConfigDict, Field
 from scipy.stats import linregress
 
+from ._cirs062 import CIRS062NominalReference, build_nominal_reference
 from .core import pdf
 from .core.plotly_utils import add_title
 from .core.profile import CollapsedCircleProfile
@@ -150,7 +151,7 @@ class CIRSDensityFit(BaseModel):
 
 
 class CIRS062MResult(CheeseResult):
-    """CIRS insert measurements, supplied references and acquisition provenance.
+    """CIRS insert measurements, acquisition provenance and reference data.
 
     The inherited ``rois`` measurements retain their original keys and units.
     Additional statistics do not identify materials or establish acceptance limits.
@@ -166,6 +167,9 @@ class CIRS062MResult(CheeseResult):
         title="Analysis and sampling settings"
     )
     measurement_notes: list[str] = Field(title="Measurement scope and interpretation")
+    nominal_reference: CIRS062NominalReference | None = Field(
+        default=None, title="CIRS electron density phantom nominal reference"
+    )
 
 
 class CheeseModule(CatPhanModule):
@@ -701,7 +705,8 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
         logo: Path, str
             A custom logo to use in the PDF report. If nothing is passed, the default pylinac logo is used.
         detailed : bool
-            Include every region result, the analysed image and available density curve.
+            Include every region result, the analysed image, the available density
+            curve and the nominal phantom reference for CIRS analyses.
         branding : mapping, optional
             Full report identity, used only for detailed reports.
         """
@@ -740,6 +745,27 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
                     "Within supplied tolerance", missing_label="Not evaluated"
                 ),
             }
+            table_labels = {
+                "rois": ReportTableLabels(
+                    row_heading="Insert", series_heading="Insert",
+                    row_labels={name: f"Insert {name}" for name in self.module.rois},
+                    column_labels={
+                        "center_x": "Image horizontal coordinate (pixels)",
+                        "center_y": "Image vertical coordinate (pixels)",
+                        "diameter": "Sampling diameter (pixels)",
+                        "median": "Median CT number (HU)",
+                        "std": "Pixel standard deviation (HU)",
+                    },
+                ),
+                "insert_measurements": ReportTableLabels(
+                    row_heading="Insert", series_heading="Insert",
+                    row_labels={name: f"Insert {name}" for name in self.module.rois},
+                    column_labels={
+                        name: definition.title or name
+                        for name, definition in CIRSInsertResult.model_fields.items()
+                    },
+                ),
+            }
             if isinstance(self, CIRS062M):
                 fields.update({
                     ("acquisition", name): ReportField(label)
@@ -750,33 +776,47 @@ class CheesePhantomBase(CatPhanBase, ResultsDataMixin[CheeseResult]):
                         "rescale_units": "DICOM rescale units",
                     }.items()
                 })
+                fields[("nominal_reference",)] = ReportField(
+                    "CIRS electron density phantom nominal reference",
+                    explanation=(
+                        "Use the table and insert certificate for the phantom model "
+                        "scanned. Approximate HU depend on the scan protocol. A single "
+                        "HU estimate is shown with matching bounds. Assign insert "
+                        "materials from the physical scan setup."
+                    ),
+                    decimal_places=3,
+                )
+                fields[("nominal_reference", "model_062m_mass_density_and_red")] = (
+                    ReportField("Model 062M physical density and RED")
+                )
+                table_labels["nominal_reference"] = ReportTableLabels(
+                    row_heading="Reference item",
+                    row_labels={
+                        "H2O Syringe": "H2O Syringe",
+                        "H2O Insert With Chamber Cavity": "H2O Insert With Chamber Cavity",
+                        "H2O Insert": "H2O Insert",
+                    },
+                    column_labels={
+                        "model_no": "Model No.",
+                        "quantity": "Qty",
+                        "physical_density_g_cm3": "Physical density (g/cm³)",
+                        "electron_density_1e23_per_cm3": "Electron density (×10²³ e/cm³)",
+                        "relative_electron_density": "RED (relative to water)",
+                        "minimum_hu": "Lower estimate (HU)",
+                        "maximum_hu": "Upper estimate (HU)",
+                    },
+                )
             publish_analysis_report(
                 self.results_data(), filename, title=f"{self.model} Phantom Analysis",
                 context={"Phantom model": self.model, "Number of scan images": self.num_images},
-                scan_images=[Path(img.path).name for img in self.dicom_stack],
+                scan_images=(
+                    ()
+                    if isinstance(self, CIRS062M)
+                    else [Path(img.path).name for img in self.dicom_stack]
+                ),
                 notes=notes, metadata=metadata, logo=logo, branding=branding,
                 fields=fields,
-                table_labels={
-                    "rois": ReportTableLabels(
-                        row_heading="Insert", series_heading="Insert",
-                        row_labels={name: f"Insert {name}" for name in self.module.rois},
-                        column_labels={
-                            "center_x": "Image horizontal coordinate (pixels)",
-                            "center_y": "Image vertical coordinate (pixels)",
-                            "diameter": "Sampling diameter (pixels)",
-                            "median": "Median CT number (HU)",
-                            "std": "Pixel standard deviation (HU)",
-                        },
-                    ),
-                    "insert_measurements": ReportTableLabels(
-                        row_heading="Insert", series_heading="Insert",
-                        row_labels={name: f"Insert {name}" for name in self.module.rois},
-                        column_labels={
-                            name: definition.title or name
-                            for name, definition in CIRSInsertResult.model_fields.items()
-                        },
-                    ),
-                },
+                table_labels=table_labels,
                 plots=plots, open_file=open_file,
             )
             return
@@ -1254,6 +1294,7 @@ class CIRS062M(CheesePhantomBase):
         return CIRS062MResult(
             **base.model_dump(), insert_measurements=measurements, density_fit=fit,
             reference_roi=self._reference_roi, acquisition=acquisition,
+            nominal_reference=build_nominal_reference(),
             analysis_settings={
                 "x_adjustment_mm": float(self.x_adjustment),
                 "y_adjustment_mm": float(self.y_adjustment),

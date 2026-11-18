@@ -207,6 +207,17 @@ Report metadata, notes, custom logos, branding and binary output streams use the
 same options as the other detailed reports. Existing calls without
 ``detailed=True`` retain their legacy PDF layout.
 
+The detailed PDF and ``results_data(as_json=True)`` include a nominal reference
+for the CIRS electron density phantom. The ``nominal_reference`` JSON field
+contains the Model 062 specifications, included components and inserts, optional
+accessories, approximate HU ranges and the Model 062M physical density and
+relative electron density (RED) table. Use the reference for the applicable
+phantom model and insert certificate. Approximate HU vary with the acquisition
+protocol. Comparisons and density fits use the supplied ``roi_config`` values.
+See the `CIRS Model 062M datasheet
+<https://www.cirsinc.com/wp-content/uploads/2019/12/062M-DS-121619.pdf>`__
+for the Model 062M material specifications.
+
 Supplying insert identities and references
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

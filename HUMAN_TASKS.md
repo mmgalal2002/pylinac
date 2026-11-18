@@ -1,5 +1,10 @@
 # Human QA Checklist
 
+## CIRS nominal reference review: 2026-11-18
+
+- [ ] Confirm the phantom revision and matching insert certificate when selecting
+      the Model 062 or Model 062M nominal values for the local workflow.
+
 ## CIRS062M Correction Review: 2026-11-17
 
 - [ ] Confirm the physical insert arrangement and supply the matching insert
