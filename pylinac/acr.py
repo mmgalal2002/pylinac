@@ -7,21 +7,26 @@ import warnings
 import webbrowser
 from collections.abc import Mapping
 from io import BytesIO
+from itertools import combinations
 from pathlib import Path
+from textwrap import wrap
 
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.patches import Ellipse
 from plotly import graph_objects as go
+from pydicom.dataset import Dataset
 from pydantic import BaseModel, ConfigDict, Field
 from scipy import ndimage
 from skimage import draw, measure
 from skimage.filters import threshold_li, threshold_otsu
 
+from ._acr_467_report import _json_report, _report_figures, _write_report
 from .core import pdf
 from .core.array_utils import fill_middle_zeros, find_nearest_idx
 from .core.contrast import Contrast
 from .core.geometry import Line, LineSerialized, Point
-from .core.image import DicomImage
+from .core.image import DicomImage, DicomImageStack
 from .core.mtf import MTF, format_resolution
 from .core.plotly_utils import add_title
 from .core.profile import FWXMProfile
@@ -842,6 +847,834 @@ class ACRCT(CatPhanBase, ResultsDataMixin[ACRCTResult]):
         return [
             absolute_origin_position + offset_mm for offset_mm in relative_offsets_mm
         ]
+
+
+class ACRCT467Statistics(BaseModel):
+    """Descriptive statistics of the rescaled values in a sampled region."""
+
+    pixel_count: int
+    mean: float
+    median: float
+    stdev: float
+    variance: float
+    minimum: float
+    maximum: float
+    percentiles: dict[int, float]
+    interquartile_range: float
+    median_absolute_deviation: float
+    skewness: float | None
+    excess_kurtosis: float | None
+
+
+class ACRCT467Histogram(BaseModel):
+    """Bin edges and counts of the original samples in a selected region."""
+
+    bin_edges: list[float]
+    counts: list[int]
+
+
+class ACRCT467Boundary(BaseModel):
+    """Independent local threshold evidence for the nominal insert location."""
+
+    center_px: tuple[float, float]
+    equivalent_diameter_mm: float
+    center_offset_mm: float
+    local_contrast: float
+
+
+class ACRCT467PlacementSample(BaseModel):
+    """Statistics for a disk shifted from its nominal location in the image plane."""
+
+    offset_mm: tuple[float, float]
+    pixel_count: int
+    mean: float
+    median: float
+    stdev: float
+
+
+class ACRCT467ROI(ACRCT467Statistics):
+    """Image-space location and rescaled pixel statistics of one sampling disk."""
+
+    center_px: tuple[float, float]
+    angle_deg: float | None
+    distance_mm: float
+    radius_mm: float
+    histogram: ACRCT467Histogram
+    sphere: ACRCT467Statistics | None
+    boundary: ACRCT467Boundary | None
+    placement_sensitivity: list[ACRCT467PlacementSample]
+    placement_median_span: float
+
+
+class ACRCT467Acquisition(BaseModel):
+    """Selected acquisition values reported by DICOM, not inferred measurements."""
+
+    image_type: list[str]
+    convolution_kernel: list[str]
+    tube_voltage_kvp: float | None
+    tube_current_ma: float | None
+    exposure_mas: float | None
+    ctdi_vol_mgy: float | None
+    reconstruction_diameter_mm: float | None
+
+
+class ACRCT467Slice(BaseModel):
+    """Slice geometry and fixed-coordinate disk samples, including outside the phantom."""
+
+    index: int
+    z_mm: float
+    outline_center_px: tuple[float, float] | None
+    outline_equivalent_diameter_mm: float | None
+    slice_thickness_mm: float | None
+    rescale_slope: float
+    rescale_intercept: float
+    rescale_type: str | None
+    acquisition: ACRCT467Acquisition
+    rois: dict[str, ACRCT467Statistics]
+
+
+class ACRCT467Comparison(BaseModel):
+    """Signed contrasts (second minus first) and pooled-noise CNR for two disks."""
+
+    first_roi: str
+    second_roi: str
+    mean_difference: float
+    median_difference: float
+    pooled_stdev: float
+    mean_cnr: float | None
+    median_cnr: float | None
+
+
+class ACRCT467CTNumberReference(BaseModel):
+    """Site-approved mean HU reference for an independently confirmed rod position."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    material: str = Field(min_length=1)
+    expected_hu: float = Field(allow_inf_nan=False)
+    tolerance_hu: float = Field(ge=0, allow_inf_nan=False)
+    source: str = Field(min_length=1)
+
+
+class ACRCT467CTNumberCheck(BaseModel):
+    """Comparison to a supplied reference, or an ungraded observation without HU units."""
+
+    reference: ACRCT467CTNumberReference
+    difference_hu: float | None
+    passed: bool | None
+
+
+class ACRCT467GuideMeasurements(BaseModel):
+    """Model 467 guide sampling and optional site-specific CT-number checks."""
+
+    guide_url: str = "https://cspmedical.com/content/102-1492_tissue_phantom_user_guide.pdf"
+    rod_sample_diameter_mm: float = 10.0
+    nominal_caliper_spacing_mm: float = 50.0
+    rod_statistics: dict[str, ACRCT467Statistics]
+    ct_number_checks: dict[str, ACRCT467CTNumberCheck]
+    ct_number_passed: bool | None
+
+
+class ACRCT467Result(ResultBase):
+    """Measurements of numbered regions in a Gammex 467 CT series."""
+
+    phantom_model: str = "ACR Gammex 467"
+    origin_slice: int
+    origin_z_mm: float
+    num_images: int
+    center_px: tuple[float, float]
+    reference_angle_deg: float
+    reference_angle_method: str
+    image_shape_px: tuple[int, int]
+    pixel_spacing_mm: tuple[float, float]
+    slice_spacing_mm: float | None
+    value_units: str
+    rois: dict[str, ACRCT467ROI]
+    slices: list[ACRCT467Slice]
+    pair_comparisons: list[ACRCT467Comparison]
+    sphere_slice_indices: list[int]
+    sphere_unavailable_reason: str | None
+    limitations: list[str]
+    guide_measurements: ACRCT467GuideMeasurements | None = None
+
+
+class ACRCT467(ResultsDataMixin[ACRCT467Result]):
+    """Measure numbered insert regions in the Gammex 467 CT phantom.
+
+    This is distinct from the four-module 464 phantom analyzed by :class:`ACRCT`.
+    The 467 uses a center position and two eight-position rings; numbering is
+    geometric and does not assign material identities or acceptance limits.
+    """
+
+    def __init__(self, path: str | Path | DicomImageStack) -> None:
+        """Load a DICOM directory or an already rescaled CT image stack."""
+        super().__init__()
+        self.dicom_stack = (
+            path
+            if isinstance(path, DicomImageStack)
+            else DicomImageStack(path, min_number=1, check_uid=False)
+        )
+        self._result: ACRCT467Result | None = None
+
+    @classmethod
+    def from_zip(cls, path: str | Path) -> ACRCT467:
+        """Load a single CT series from a ZIP archive."""
+        return cls(DicomImageStack.from_zip(path, min_number=1, check_uid=False))
+
+    def analyze(
+        self,
+        origin_slice: int | None = None,
+        reference_angle_deg: float | None = None,
+        *,
+        ct_number_references: Mapping[str, ACRCT467CTNumberReference] | None = None,
+    ) -> None:
+        """Locate the phantom and measure both 20 mm disks and 10 mm guide samples.
+
+        Parameters
+        ----------
+        origin_slice : int, optional
+            Zero-based index in the sorted CT stack. By default, use the
+            middle slice among those with a complete phantom outline.
+        reference_angle_deg : float, optional
+            Angle of the first inner-ring position, measured clockwise from
+            image right. By default, locate the brightest inner-ring insert.
+        ct_number_references : Mapping[str, ACRCT467CTNumberReference], optional
+            Site-approved mean HU targets and tolerances keyed by ROI name.
+            Confirm the rod identity, sampling position, and scanner protocol
+            before supplying a reference. CT-number grading requires declared HU.
+            No acceptance limits are inferred from the manufacturer's guide.
+        """
+        self._result = None
+        images = self.dicom_stack
+        metadata = [image.metadata for image in images]
+        series_uids = {item.get("SeriesInstanceUID") for item in metadata}
+        if (
+            len(series_uids) != 1
+            or None in series_uids
+            or any(item.get("Modality") != "CT" for item in metadata)
+        ):
+            raise ValueError("Gammex 467 analysis requires a single CT series.")
+        row_spacing, column_spacing = map(float, metadata[0].PixelSpacing)
+        spacing = (row_spacing, column_spacing)
+        if not all(np.isfinite(spacing)) or min(spacing) <= 0:
+            raise ValueError("Gammex 467 analysis requires positive pixel spacing.")
+        shape = images[0].array.shape
+        if any(
+            image.array.ndim != 2
+            or image.array.shape != shape
+            or not np.allclose(image.metadata.PixelSpacing, spacing)
+            for image in images
+        ):
+            raise ValueError("Gammex 467 analysis requires a consistent pixel grid.")
+        if any(not item.get("ImageOrientationPatient") for item in metadata):
+            raise ValueError("Gammex 467 analysis requires DICOM slice orientations.")
+        positions_mm = np.asarray(
+            [item.ImagePositionPatient for item in metadata], dtype=float
+        )
+        orientations = np.asarray(
+            [item.ImageOrientationPatient for item in metadata], dtype=float
+        )
+        orientation_axes = orientations[0].reshape(2, 3)
+        z_mm = positions_mm[:, 2]
+        z_steps = np.diff(z_mm)
+        if (
+            not np.isfinite(positions_mm).all()
+            or not np.allclose(
+                positions_mm[:, :2], positions_mm[0, :2], atol=0.01, rtol=0
+            )
+            or not np.allclose(orientations, orientations[0], atol=0.001, rtol=0)
+            or not np.allclose(orientations[:, (2, 5)], 0, atol=0.001, rtol=0)
+            or not np.allclose(
+                orientation_axes @ orientation_axes.T, np.eye(2), atol=0.001
+            )
+            or np.any(z_steps <= 0)
+        ):
+            raise ValueError(
+                "Gammex 467 analysis requires aligned axial slices at distinct z positions."
+            )
+        slice_spacing = (
+            float(np.median(z_steps))
+            if z_steps.size and np.allclose(z_steps, np.median(z_steps), atol=0.05, rtol=0)
+            else None
+        )
+        thicknesses = [self._numeric_tag(item, "SliceThickness") for item in metadata]
+        rescale_types = [
+            str(item.get("RescaleType") or "").strip().upper() or None
+            for item in metadata
+        ]
+        if len(set(rescale_types) - {None}) > 1:
+            raise ValueError("Gammex 467 analysis cannot combine different declared pixel units.")
+
+        outlines = {
+            index: outline
+            for index, image in enumerate(images)
+            if (outline := self._body_outline(image.array, spacing)) is not None
+        }
+        if not outlines:
+            raise ValueError("No complete Gammex 467 phantom outline was found.")
+        if origin_slice is None:
+            middle_z = np.median(z_mm[list(outlines)])
+            origin_slice = min(outlines, key=lambda index: abs(z_mm[index] - middle_z))
+        if origin_slice not in outlines:
+            raise ValueError("The selected origin slice has no complete phantom outline.")
+
+        center = outlines[origin_slice][0]
+        array = images[origin_slice].array
+        smoothed = ndimage.gaussian_filter(
+            array.astype(float), sigma=(2 / spacing[0], 2 / spacing[1])
+        )
+        angle_method = "user_supplied"
+        if reference_angle_deg is None:
+            reference_angle_deg = self._reference_angle(smoothed, center, spacing)
+            angle_method = "brightest_inner_component"
+        if not math.isfinite(reference_angle_deg):
+            raise ValueError("The Gammex 467 reference angle must be finite.")
+        reference_angle_deg %= 360
+        positions = [(None, 0.0)] + [
+            ((reference_angle_deg + offset + step * 45) % 360, distance)
+            for offset, distance in ((0, 55.0), (22.5, 105.0))
+            for step in range(8)
+        ]
+        radius = 10.0
+        sphere_indices, sphere_reason = self._sphere_coverage(
+            z_mm, origin_slice, radius, set(outlines), slice_spacing, thicknesses
+        )
+        references = {
+            name: ACRCT467CTNumberReference.model_validate(reference)
+            for name, reference in (ct_number_references or {}).items()
+        }
+        unknown = references.keys() - {f"ROI {number}" for number in range(1, len(positions) + 1)}
+        if unknown:
+            raise ValueError(f"Unknown Gammex 467 reference ROI(s): {', '.join(sorted(unknown))}")
+        guide_radius = 5.0
+        rois = {}
+        guide_statistics = {}
+        for number, (angle, distance) in enumerate(positions, start=1):
+            radians = math.radians(angle or 0)
+            location = (
+                center[0] + distance * math.cos(radians) / spacing[1],
+                center[1] + distance * math.sin(radians) / spacing[0],
+            )
+            values = self._disk_values(array, location, radius, spacing)
+            name = f"ROI {number}"
+            guide_statistics[name] = self._statistics(
+                self._disk_values(array, location, guide_radius, spacing)
+            )
+            statistics = self._statistics(values)
+            shifts = self._placement_samples(array, location, radius, spacing)
+            medians = [sample.median for sample in shifts]
+            sphere = None
+            if sphere_indices:
+                sphere_values = np.concatenate(
+                    [
+                        self._disk_values(
+                            images[index].array,
+                            location,
+                            math.sqrt(radius**2 - (z_mm[index] - z_mm[origin_slice]) ** 2),
+                            spacing,
+                        )
+                        for index in sphere_indices
+                    ]
+                )
+                sphere = self._statistics(sphere_values)
+            rois[name] = ACRCT467ROI(
+                **statistics.model_dump(),
+                center_px=location,
+                angle_deg=angle,
+                distance_mm=distance,
+                radius_mm=radius,
+                histogram=self._histogram(values, statistics),
+                sphere=sphere,
+                boundary=self._insert_boundary(smoothed, location, spacing),
+                placement_sensitivity=shifts,
+                placement_median_span=max(medians) - min(medians),
+            )
+        slices = [
+            ACRCT467Slice(
+                index=index,
+                z_mm=float(z_mm[index]),
+                outline_center_px=outlines[index][0] if index in outlines else None,
+                outline_equivalent_diameter_mm=(
+                    outlines[index][1] if index in outlines else None
+                ),
+                slice_thickness_mm=thicknesses[index],
+                rescale_slope=float(item.get("RescaleSlope", 1)),
+                rescale_intercept=float(item.get("RescaleIntercept", 0)),
+                rescale_type=rescale_types[index],
+                acquisition=self._acquisition(item),
+                rois={
+                    name: self._statistics(
+                        self._disk_values(images[index].array, roi.center_px, radius, spacing)
+                    )
+                    for name, roi in rois.items()
+                },
+            )
+            for index, item in enumerate(metadata)
+        ]
+        value_units = "HU" if all(unit == "HU" for unit in rescale_types) else "RESCALED"
+        checks = {}
+        for name, reference in references.items():
+            difference = (
+                guide_statistics[name].mean - reference.expected_hu if value_units == "HU" else None
+            )
+            checks[name] = ACRCT467CTNumberCheck(
+                reference=reference,
+                difference_hu=difference,
+                passed=abs(difference) <= reference.tolerance_hu if difference is not None else None,
+            )
+        passed = None
+        if checks and value_units == "HU":
+            passed = all(check.passed is True for check in checks.values())
+        limitations = [
+            "ROI numbering describes geometry. Rod identities must be confirmed independently.",
+            "Disks use nominal layout coordinates; boundary evidence is reported separately when visible.",
+            "The Model 467 guide specifies nominal references, not acceptance limits. No 464 module tests are inferred.",
+            "Slice profiles sample fixed coordinates even on planes without a complete phantom outline.",
+        ]
+        if value_units != "HU":
+            limitations.append(
+                "Pixel values are rescaled; HU is not explicitly declared on every slice."
+            )
+        self._result = ACRCT467Result(
+            origin_slice=origin_slice,
+            origin_z_mm=float(z_mm[origin_slice]),
+            num_images=len(images),
+            center_px=center,
+            reference_angle_deg=reference_angle_deg,
+            reference_angle_method=angle_method,
+            image_shape_px=shape,
+            pixel_spacing_mm=spacing,
+            slice_spacing_mm=slice_spacing,
+            value_units=value_units,
+            rois=rois,
+            slices=slices,
+            pair_comparisons=[
+                self._compare_disks(first_name, first, second_name, second)
+                for (first_name, first), (second_name, second) in combinations(rois.items(), 2)
+            ],
+            sphere_slice_indices=sphere_indices,
+            sphere_unavailable_reason=sphere_reason,
+            limitations=limitations,
+            guide_measurements=ACRCT467GuideMeasurements(
+                rod_sample_diameter_mm=2 * guide_radius,
+                rod_statistics=guide_statistics,
+                ct_number_checks=checks,
+                ct_number_passed=passed,
+            ),
+        )
+
+    def results(self) -> str:
+        """Return a summary of the geometry and all 17 disk measurements."""
+        result = self._generate_results_data()
+        origin = result.slices[result.origin_slice]
+        row_mm, column_mm = result.pixel_spacing_mm
+        sphere_summary = (
+            f"Sphere samples use {len(result.sphere_slice_indices)} planes."
+            if result.sphere_slice_indices
+            else f"Sphere samples unavailable: {result.sphere_unavailable_reason}"
+        )
+        lines = [
+            f"Origin index {origin.index} of {result.num_images} slices; z = {origin.z_mm:g} mm",
+            f"Pixel spacing: {row_mm:g} x {column_mm:g} mm (row x column)",
+            f"Reference angle: {result.reference_angle_deg:.2f} deg "
+            f"({result.reference_angle_method})",
+            f"Units: {result.value_units}; nominal sample diameter: 20 mm",
+            sphere_summary,
+            "",
+            f"{'Region':<8}{'Mean':>10}{'Median':>10}{'SD':>10}{'Sample n':>10}{'Boundary':>12}",
+        ]
+        for name, roi in result.rois.items():
+            boundary = "Visible" if roi.boundary is not None else "Layout only"
+            lines.append(
+                f"{name:<8}{roi.mean:>10.2f}{roi.median:>10.2f}{roi.stdev:>10.2f}"
+                f"{roi.pixel_count:>10}{boundary:>12}"
+            )
+        lines += ["", "Measurement limitations:"]
+        lines.extend(line for note in result.limitations for line in wrap(note, width=96))
+        return "\n".join(lines)
+
+    def plot_analyzed_image(self, show: bool = True) -> plt.Figure:
+        """Plot the analysis slice and its numbered, physically sized sampling disks."""
+        result = self._generate_results_data()
+        row_mm, column_mm = result.pixel_spacing_mm
+        lower, upper = self._overlay_window(result)
+        fig, axis = plt.subplots(figsize=(7, 7), layout="constrained")
+        axis.imshow(
+            self.dicom_stack[result.origin_slice].array,
+            cmap="gray",
+            aspect=row_mm / column_mm,
+            vmin=lower,
+            vmax=upper,
+        )
+        for name, roi in result.rois.items():
+            color = self._roi_color(roi)
+            self._draw_sampling_disk(axis, roi, result.pixel_spacing_mm)
+            axis.annotate(
+                name.removeprefix("ROI "),
+                roi.center_px,
+                color=color,
+                ha="center",
+                va="center",
+                fontsize=9,
+                fontweight="bold",
+                bbox={"facecolor": "black", "edgecolor": "none", "alpha": 0.65, "pad": 1},
+            )
+        axis.set_title(
+            f"Gammex 467: slice index {result.origin_slice}, z = {result.origin_z_mm:g} mm\n"
+            "Blue: visible boundary   |   Yellow: layout only"
+        )
+        axis.set_axis_off()
+        if show:
+            plt.show()
+        return fig
+
+    def plotly_analyzed_images(self, show: bool = True) -> dict[str, go.Figure]:
+        """Return the analysis slice with interactive sampling-disk overlays."""
+        result = self._generate_results_data()
+        row_mm, column_mm = result.pixel_spacing_mm
+        lower, upper = self._overlay_window(result)
+        title = f"Gammex 467: slice index {result.origin_slice}"
+        figure = self.dicom_stack[result.origin_slice].plotly(
+            title=title,
+            show=False,
+            show_metrics=False,
+            zmin=lower,
+            zmax=upper,
+        )
+        figure.update_yaxes(scaleratio=row_mm / column_mm)
+        radians = np.linspace(0, 2 * math.pi, 65)
+        for name, roi in result.rois.items():
+            color = self._roi_color(roi)
+            status = "Visible boundary" if roi.boundary is not None else "Layout only"
+            x_center, y_center = roi.center_px
+            figure.add_scatter(
+                x=x_center + roi.radius_mm / column_mm * np.cos(radians),
+                y=y_center + roi.radius_mm / row_mm * np.sin(radians),
+                mode="lines",
+                line_color=color,
+                showlegend=False,
+                name=name,
+                hovertemplate=(
+                    f"{name}: {roi.median:.2f} {result.value_units}"
+                    f"<br>{status}<extra></extra>"
+                ),
+            )
+            figure.add_annotation(
+                x=x_center,
+                y=y_center,
+                text=name.removeprefix("ROI "),
+                showarrow=False,
+                font_color=color,
+                bgcolor="black",
+            )
+        if show:
+            figure.show()
+        return {result.phantom_model: figure}
+
+    def plot_slice_profiles(self, show: bool = True) -> plt.Figure:
+        """Plot the disk medians at fixed image coordinates across the CT stack."""
+        result = self._generate_results_data()
+        fig, axes = plt.subplots(2, 1, figsize=(8, 7), sharex=True, layout="constrained")
+        z_mm = [plane.z_mm for plane in result.slices]
+        names = list(result.rois)
+        groups = (("Center and inner ring", names[:9]), ("Outer ring", names[9:]))
+        for axis, (title, group) in zip(axes, groups):
+            for name in group:
+                medians = [plane.rois[name].median for plane in result.slices]
+                axis.plot(z_mm, medians, ".-", label=name)
+            axis.axvline(result.origin_z_mm, color="gray", linestyle="--", linewidth=1)
+            axis.set(title=title, ylabel=f"Median ({result.value_units})")
+            axis.legend(ncols=5, fontsize=8)
+        axes[-1].set_xlabel("DICOM slice position z (mm)")
+        if show:
+            plt.show()
+        return fig
+
+    def publish_pdf(
+        self,
+        filename: str | Path | BytesIO,
+        *,
+        detailed: bool = True,
+        logo: Path | str | None = None,
+    ) -> None:
+        """Save a detailed report or a QA summary, both with analysis figures.
+
+        Parameters
+        ----------
+        filename : str, Path, or BytesIO
+            Report destination.
+        detailed : bool
+            Include all measurement tables. Both modes include the analysis figures.
+        logo : Path, str, or None
+            Optional logo image for the Pro-ART page header. If omitted, the
+            report displays the brand name as text in the logo position.
+        """
+        result = self.results_data()
+        assert isinstance(result, ACRCT467Result)
+        destination = str(filename) if isinstance(filename, Path) else filename
+        _write_report(
+            destination, result, _report_figures(self, result), detailed=detailed, logo=logo,
+        )
+
+    def publish_json(self, filename: str | Path) -> None:
+        """Save the QA checklist and grouped full-precision measurements as JSON.
+
+        Parameters
+        ----------
+        filename : str or Path
+            Report destination. The raw :meth:`results_data` structure is unchanged.
+        """
+        result = self.results_data()
+        assert isinstance(result, ACRCT467Result)
+        Path(filename).write_text(_json_report(result), encoding="utf-8", newline="\n")
+
+    def _generate_results_data(self) -> ACRCT467Result:
+        if self._result is None:
+            raise ValueError("Analyze the Gammex 467 series before requesting results.")
+        return self._result
+
+    @staticmethod
+    def _roi_color(roi: ACRCT467ROI) -> str:
+        return "deepskyblue" if roi.boundary is not None else "gold"
+
+    @classmethod
+    def _draw_sampling_disk(
+        cls, axis: plt.Axes, roi: ACRCT467ROI, spacing: tuple[float, float]
+    ) -> None:
+        row_mm, column_mm = spacing
+        axis.add_patch(
+            Ellipse(
+                roi.center_px,
+                width=2 * roi.radius_mm / column_mm,
+                height=2 * roi.radius_mm / row_mm,
+                fill=False,
+                edgecolor=cls._roi_color(roi),
+                linewidth=1.5,
+            )
+        )
+
+    @staticmethod
+    def _overlay_window(result: ACRCT467Result) -> tuple[float, float]:
+        return (
+            min(roi.percentiles[5] for roi in result.rois.values()),
+            max(roi.percentiles[95] for roi in result.rois.values()),
+        )
+
+    @staticmethod
+    def _body_outline(
+        array: np.ndarray, spacing: tuple[float, float]
+    ) -> tuple[tuple[float, float], float] | None:
+        reduced = array[::2, ::2]
+        labels, _ = ndimage.label(reduced > threshold_otsu(reduced))
+        counts = np.bincount(labels.ravel())
+        counts[0] = 0
+        if not counts.max():
+            return None
+        body = ndimage.binary_fill_holes(labels == counts.argmax())
+        diameter = 2 * math.sqrt(body.sum() * 4 * math.prod(spacing) / math.pi)
+        if not 310 <= diameter <= 350 or any(
+            edge.any() for edge in (body[0], body[-1], body[:, 0], body[:, -1])
+        ):
+            return None
+        row, column = ndimage.center_of_mass(body)
+        return (float(column * 2), float(row * 2)), diameter
+
+    @staticmethod
+    def _sphere_coverage(
+        z_mm: np.ndarray,
+        origin_slice: int,
+        radius: float,
+        outline_indices: set[int],
+        slice_spacing: float | None,
+        thicknesses: list[float | None],
+    ) -> tuple[list[int], str | None]:
+        origin_z = z_mm[origin_slice]
+        first = int(np.searchsorted(z_mm, origin_z - radius, side="right")) - 1
+        last = int(np.searchsorted(z_mm, origin_z + radius))
+        bracket = range(first, last + 1)
+        if first < 0 or last >= len(z_mm) or not outline_indices.issuperset(bracket):
+            return [], "The complete sphere extent is not bracketed by phantom slices."
+        if slice_spacing is None or any(
+            thickness is None or not math.isfinite(thickness) or thickness + 0.05 < slice_spacing
+            for thickness in thicknesses[first : last + 1]
+        ):
+            return [], "Uniform, gap-free coverage of the sphere could not be established."
+        return [index for index in bracket if abs(z_mm[index] - origin_z) < radius], None
+
+    @staticmethod
+    def _statistics(values: np.ndarray) -> ACRCT467Statistics:
+        pixels = values.astype(float, copy=False)
+        mean = float(pixels.mean())
+        stdev = float(pixels.std())
+        levels = (5, 25, 50, 75, 95)
+        percentiles = dict(zip(levels, map(float, np.percentile(pixels, levels))))
+        normalized = (pixels - mean) / stdev if stdev > 0 else None
+        return ACRCT467Statistics(
+            pixel_count=pixels.size,
+            mean=mean,
+            median=percentiles[50],
+            stdev=stdev,
+            variance=stdev**2,
+            minimum=float(pixels.min()),
+            maximum=float(pixels.max()),
+            percentiles=percentiles,
+            interquartile_range=percentiles[75] - percentiles[25],
+            median_absolute_deviation=float(np.median(np.abs(pixels - percentiles[50]))),
+            skewness=float(np.mean(normalized**3)) if normalized is not None else None,
+            excess_kurtosis=float(np.mean(normalized**4) - 3) if normalized is not None else None,
+        )
+
+    @staticmethod
+    def _histogram(values: np.ndarray, statistics: ACRCT467Statistics) -> ACRCT467Histogram:
+        width = 2 * statistics.interquartile_range / math.cbrt(statistics.pixel_count)
+        sturges_bins = math.ceil(math.log2(statistics.pixel_count) + 1)
+        fd_bins = math.ceil((statistics.maximum - statistics.minimum) / width) if width > 0 else 0
+        counts, edges = np.histogram(values, bins=min(256, max(sturges_bins, fd_bins)))
+        return ACRCT467Histogram(bin_edges=edges.tolist(), counts=counts.tolist())
+
+    @staticmethod
+    def _compare_disks(
+        first_name: str,
+        first: ACRCT467ROI,
+        second_name: str,
+        second: ACRCT467ROI,
+    ) -> ACRCT467Comparison:
+        pooled = math.hypot(first.stdev, second.stdev) / math.sqrt(2)
+        mean_difference = second.mean - first.mean
+        median_difference = second.median - first.median
+        return ACRCT467Comparison(
+            first_roi=first_name,
+            second_roi=second_name,
+            mean_difference=mean_difference,
+            median_difference=median_difference,
+            pooled_stdev=pooled,
+            mean_cnr=abs(mean_difference) / pooled if pooled > 0 else None,
+            median_cnr=abs(median_difference) / pooled if pooled > 0 else None,
+        )
+
+    @staticmethod
+    def _reference_angle(
+        smoothed: np.ndarray, center: tuple[float, float], spacing: tuple[float, float]
+    ) -> float:
+        rows, columns = np.ogrid[: smoothed.shape[0], : smoothed.shape[1]]
+        radii = np.hypot((rows - center[1]) * spacing[0], (columns - center[0]) * spacing[1])
+        ring = (radii >= 49) & (radii <= 61)
+        peak = np.unravel_index(np.argmax(np.where(ring, smoothed, -np.inf)), smoothed.shape)
+        baseline = np.median(smoothed[ring])
+        threshold = (smoothed[peak] + baseline) / 2
+        labels, _ = ndimage.label((smoothed > threshold) & (radii > 33) & (radii < 77))
+        component = labels == labels[peak]
+        diameter = 2 * math.sqrt(component.sum() * math.prod(spacing) / math.pi)
+        if not labels[peak] or not 15 <= diameter <= 45:
+            raise ValueError(
+                "No distinct inner-ring reference insert was found; supply a reference angle."
+            )
+        row, column = ndimage.center_of_mass(component)
+        dx_mm = (column - center[0]) * spacing[1]
+        dy_mm = (row - center[1]) * spacing[0]
+        return math.degrees(math.atan2(dy_mm, dx_mm)) % 360
+
+    @staticmethod
+    def _insert_boundary(
+        smoothed: np.ndarray, center: tuple[float, float], spacing: tuple[float, float]
+    ) -> ACRCT467Boundary | None:
+        row_radius, column_radius = 22 / spacing[0], 22 / spacing[1]
+        top, bottom = math.ceil(center[1] - row_radius), math.floor(center[1] + row_radius) + 1
+        left, right = math.ceil(center[0] - column_radius), math.floor(center[0] + column_radius) + 1
+        if not (0 <= top < bottom <= smoothed.shape[0] and 0 <= left < right <= smoothed.shape[1]):
+            return None
+        rows, columns = np.ogrid[top:bottom, left:right]
+        radii = np.hypot((rows - center[1]) * spacing[0], (columns - center[0]) * spacing[1])
+        patch = smoothed[top:bottom, left:right]
+        background = patch[(radii >= 19) & (radii <= 22)]
+        background_median = float(np.median(background))
+        contrast = float(np.median(patch[radii <= 5])) - background_median
+        noise = 1.4826 * np.median(np.abs(background - background_median))
+        if abs(contrast) <= 5 * noise:
+            return None
+        threshold = background_median + contrast / 2
+        labels, _ = ndimage.label(((patch - threshold) * contrast > 0) & (radii <= 22))
+        label = labels[round(center[1]) - top, round(center[0]) - left]
+        if not label:
+            return None
+        component = labels == label
+        diameter = 2 * math.sqrt(component.sum() * math.prod(spacing) / math.pi)
+        row, column = ndimage.center_of_mass(component)
+        location = (float(column + left), float(row + top))
+        displacement = math.hypot(
+            (location[0] - center[0]) * spacing[1],
+            (location[1] - center[1]) * spacing[0],
+        )
+        if not 22 <= diameter <= 39 or displacement > 5 or np.any(component & (radii > 21)):
+            return None
+        return ACRCT467Boundary(
+            center_px=location,
+            equivalent_diameter_mm=diameter,
+            center_offset_mm=displacement,
+            local_contrast=contrast,
+        )
+
+    def _placement_samples(
+        self,
+        array: np.ndarray,
+        center: tuple[float, float],
+        radius: float,
+        spacing: tuple[float, float],
+    ) -> list[ACRCT467PlacementSample]:
+        samples = []
+        for x_shift in (-1.0, 0.0, 1.0):
+            for y_shift in (-1.0, 0.0, 1.0):
+                location = (center[0] + x_shift / spacing[1], center[1] + y_shift / spacing[0])
+                values = self._disk_values(array, location, radius, spacing)
+                samples.append(
+                    ACRCT467PlacementSample(
+                        offset_mm=(x_shift, y_shift),
+                        pixel_count=values.size,
+                        mean=float(np.mean(values)),
+                        median=float(np.median(values)),
+                        stdev=float(np.std(values)),
+                    )
+                )
+        return samples
+
+    @staticmethod
+    def _numeric_tag(dataset: Dataset, name: str) -> float | None:
+        value = dataset.get(name)
+        if value is None or value == "":
+            return None
+        number = float(value)
+        return number if math.isfinite(number) else None
+
+    def _acquisition(self, dataset: Dataset) -> ACRCT467Acquisition:
+        kernel = dataset.get("ConvolutionKernel")
+        image_type = dataset.get("ImageType")
+        return ACRCT467Acquisition(
+            image_type=[image_type] if isinstance(image_type, str) else list(image_type or ()),
+            convolution_kernel=[kernel] if isinstance(kernel, str) else list(kernel or ()),
+            tube_voltage_kvp=self._numeric_tag(dataset, "KVP"),
+            tube_current_ma=self._numeric_tag(dataset, "XRayTubeCurrent"),
+            exposure_mas=self._numeric_tag(dataset, "Exposure"),
+            ctdi_vol_mgy=self._numeric_tag(dataset, "CTDIvol"),
+            reconstruction_diameter_mm=self._numeric_tag(dataset, "ReconstructionDiameter"),
+        )
+
+    @staticmethod
+    def _disk_values(
+        array: np.ndarray,
+        center: tuple[float, float],
+        radius_mm: float,
+        spacing: tuple[float, float],
+    ) -> np.ndarray:
+        row_radius, column_radius = radius_mm / spacing[0], radius_mm / spacing[1]
+        top, bottom = math.ceil(center[1] - row_radius), math.floor(center[1] + row_radius) + 1
+        left, right = math.ceil(center[0] - column_radius), math.floor(center[0] + column_radius) + 1
+        if not (0 <= top <= bottom <= array.shape[0] and 0 <= left <= right <= array.shape[1]):
+            raise ValueError("A Gammex 467 sampling disk falls outside the pixel grid.")
+        rows, columns = np.ogrid[top:bottom, left:right]
+        dy_mm = (rows - center[1]) * spacing[0]
+        dx_mm = (columns - center[0]) * spacing[1]
+        disk = dx_mm**2 + dy_mm**2 <= radius_mm**2
+        return array[top:bottom, left:right][disk]
 
 
 class MRSlice11PositionModule(CatPhanModule):

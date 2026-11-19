@@ -16,7 +16,7 @@ Overview
     If you'd like to submit data, enter it `here <https://forms.gle/RBR5ubFvjogE9iC67>`_.
 
 The ACR module provides routines for automatically
-analyzing DICOM images of the ACR CT 464 phantom and Large and Medium MR phantoms.
+analyzing DICOM images of the ACR CT 464, Gammex 467, and Large and Medium MR phantoms.
 It can load a folder or zip file of images, correcting for
 translational and rotational offsets.
 
@@ -93,6 +93,98 @@ And then load, analyze, and view the results:
     ct.save_images()
     # finally, save a PDF
     ct.publish_pdf()
+
+Gammex 467 CT
+-------------
+
+Use :class:`~pylinac.acr.ACRCT467` for the Gammex 467 insert phantom. The
+464-specific :class:`~pylinac.acr.ACRCT` analyzes different structures and
+should not be used on these images.
+
+.. code-block:: python
+
+    from pylinac import ACRCT467
+
+    phantom = ACRCT467.from_zip("467-series.zip")
+    phantom.analyze()
+    print(phantom.results())
+    phantom.publish_json("467-results.json")
+    phantom.publish_pdf("467-summary.pdf", detailed=False)
+    phantom.publish_pdf("467-detailed.pdf")
+
+Load a DICOM directory with ``ACRCT467(path)``. Use one aligned axial CT series
+per analysis. By default the analyzer uses the middle slice with a complete
+phantom outline and the brightest insert on the inner ring as the angular
+reference. To override these, pass a zero-based ``origin_slice`` and/or
+``reference_angle_deg`` to ``analyze()``. The angle increases clockwise from the
+right side of the image.
+
+ROI 1 is the center. ROIs 2 through 9 are on the 55 mm ring; ROIs 10 through 17
+are on the 105 mm ring, offset by 22.5 degrees. Each disk is 20 mm in diameter.
+The numbered overlay in the PDF distinguishes visible threshold boundaries
+from regions placed by layout alone. Both use the same nominal disk positions.
+
+Both PDFs from :meth:`~pylinac.acr.ACRCT467.publish_pdf` use the same Pro-ART
+page design, with a portrait cover and linked contents. Pass
+``logo=Path("pro-art-logo.png")`` to use the original logo image; otherwise,
+the header displays the brand name as text.
+
+The cover lists CT number accuracy, CT number uniformity,
+high- and low-contrast resolution, slice thickness, geometric accuracy, and
+pass/fail status. Nominal DICOM thickness and measured outline diameter are
+listed as observations, not as acceptance tests. The 464 criteria do not apply
+to the 467.
+
+Default analysis also measures 10 mm diameter disks at the registered positions
+on the analysis slice, following the sampling diameter in the `Model 467 User's
+Guide <https://cspmedical.com/content/102-1492_tissue_phantom_user_guide.pdf>`_.
+These samples supplement the 20 mm measurements. The guide's 50 mm caliper-hole
+spacing is a nominal dimension; this analysis does not measure those holes.
+The guide's GE CT/i example values and the supplied nominal material densities
+are references, not pass/fail limits. Rods can be interchanged; use the actual
+setup and phantom-specific certificate to establish material and density.
+
+For CT-number accuracy grading, pass ``ct_number_references`` to
+:meth:`~pylinac.acr.ACRCT467.analyze`. Map independently confirmed ROI names to
+:class:`~pylinac.acr.ACRCT467CTNumberReference` objects with ``material``,
+``expected_hu``, ``tolerance_hu`` and ``source`` from an approved scanner
+protocol. Confirm that the 10 mm sample lies within the rod and that the
+reference applies to the scan protocol. With HU declared on every slice, a
+check passes if the absolute difference from the reference mean HU is no
+greater than the supplied tolerance. The grade covers those comparisons only,
+not the overall ACR checklist. Without those references or a declared HU scale,
+the result stays ungraded.
+
+Both versions include the analysis overlay, intensity and pixel variation
+plots, close-ups and histograms for all numbered regions, and every axial
+image in grouped contact sheets. They also show slice profiles, outline and
+placement measurements, and pairwise contrast and CNR plots.
+
+The detailed PDF additionally groups multiple ROIs and slices into searchable,
+full-precision tables with repeating headers. These wider tables use landscape
+pages. :meth:`~pylinac.acr.ACRCT467.publish_json` puts the same QA checklist at
+the top, then groups the original measurements into tables. Each table lists
+``columns`` once and stores its values in ``rows`` in the same order. All
+fixed-coordinate samples are in one table keyed by zero-based ``slice_index``
+and ``roi``. For boundary and sphere tables, null measurement cells mean that
+the boundary or sphere sample was unavailable. The nested form is still
+available through ``results_data(as_json=True)``.
+
+The detailed PDF and both JSON formats include:
+
+- Disk statistics and histograms, 20 mm diameter sphere statistics where the
+  complete sphere is covered by a gap-free stack, and nine placement samples
+  per disk (shifts of -1, 0, and +1 mm independently along each image axis).
+- Signed intensity differences and CNR for each unique pair of disks. CNR uses
+  the absolute difference divided by the root-mean-square of the two population
+  standard deviations. CNR is unavailable if both disks have zero noise.
+- Selected acquisition metadata, image geometry, and statistics at the same
+  disk coordinates on every slice. Slices without a complete phantom outline
+  are marked; their values are not insert measurements.
+
+``RESCALED`` denotes pixel values to which the DICOM rescale transform was
+applied but for which not every slice explicitly declares HU. The scan does not
+establish material assignments, certified densities, or pass/fail limits.
 
 .. _choosing-mr-echo-number:
 
@@ -650,6 +742,11 @@ API Documentation
 .. autopydantic_model:: pylinac.acr.SpatialResolutionModuleOutput
 
 .. autopydantic_model:: pylinac.acr.LowContrastModuleOutput
+
+.. autoclass:: pylinac.acr.ACRCT467
+  :members:
+
+.. autopydantic_model:: pylinac.acr.ACRCT467Result
 
 .. autoclass:: pylinac.acr.ACRMRILarge
     :inherited-members:
