@@ -5,6 +5,7 @@ import math
 import textwrap
 import warnings
 import webbrowser
+from collections.abc import Mapping
 from io import BytesIO
 from itertools import combinations
 from pathlib import Path
@@ -20,6 +21,7 @@ from scipy import ndimage
 from skimage import draw, measure
 from skimage.filters import threshold_li, threshold_otsu
 
+from ._acr_467_report import _json_report, _report_figures, _write_report
 from .core import pdf
 from .core.array_utils import fill_middle_zeros, find_nearest_idx
 from .core.contrast import Contrast
@@ -924,6 +926,36 @@ class ACRCT467Comparison(BaseModel):
     median_cnr: float | None
 
 
+class ACRCT467CTNumberReference(BaseModel):
+    """Site-approved mean HU reference for an independently confirmed rod position."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, str_strip_whitespace=True)
+
+    material: str = Field(min_length=1)
+    expected_hu: float = Field(allow_inf_nan=False)
+    tolerance_hu: float = Field(ge=0, allow_inf_nan=False)
+    source: str = Field(min_length=1)
+
+
+class ACRCT467CTNumberCheck(BaseModel):
+    """Comparison to a supplied reference, or an ungraded observation without HU units."""
+
+    reference: ACRCT467CTNumberReference
+    difference_hu: float | None
+    passed: bool | None
+
+
+class ACRCT467GuideMeasurements(BaseModel):
+    """Model 467 guide sampling and optional site-specific CT-number checks."""
+
+    guide_url: str = "https://cspmedical.com/content/102-1492_tissue_phantom_user_guide.pdf"
+    rod_sample_diameter_mm: float = 10.0
+    nominal_caliper_spacing_mm: float = 50.0
+    rod_statistics: dict[str, ACRCT467Statistics]
+    ct_number_checks: dict[str, ACRCT467CTNumberCheck]
+    ct_number_passed: bool | None
+
+
 class ACRCT467Result(ResultBase):
     """Measurements of numbered regions in a Gammex 467 CT series."""
 
@@ -944,6 +976,7 @@ class ACRCT467Result(ResultBase):
     sphere_slice_indices: list[int]
     sphere_unavailable_reason: str | None
     limitations: list[str]
+    guide_measurements: ACRCT467GuideMeasurements | None = None
 
 
 class ACRCT467(ResultsDataMixin[ACRCT467Result]):
@@ -973,8 +1006,10 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
         self,
         origin_slice: int | None = None,
         reference_angle_deg: float | None = None,
+        *,
+        ct_number_references: Mapping[str, ACRCT467CTNumberReference] | None = None,
     ) -> None:
-        """Locate the phantom and measure 20 mm diameter insert regions.
+        """Locate the phantom and measure both 20 mm disks and 10 mm guide samples.
 
         Parameters
         ----------
@@ -984,6 +1019,11 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
         reference_angle_deg : float, optional
             Angle of the first inner-ring position, measured clockwise from
             image right. By default, locate the brightest inner-ring insert.
+        ct_number_references : Mapping[str, ACRCT467CTNumberReference], optional
+            Site-approved mean HU targets and tolerances keyed by ROI name.
+            Confirm the rod identity, sampling position, and scanner protocol
+            before supplying a reference. CT-number grading requires declared HU.
+            No acceptance limits are inferred from the manufacturer's guide.
         """
         self._result = None
         images = self.dicom_stack
@@ -1080,7 +1120,16 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
         sphere_indices, sphere_reason = self._sphere_coverage(
             z_mm, origin_slice, radius, set(outlines), slice_spacing, thicknesses
         )
+        references = {
+            name: ACRCT467CTNumberReference.model_validate(reference)
+            for name, reference in (ct_number_references or {}).items()
+        }
+        unknown = references.keys() - {f"ROI {number}" for number in range(1, len(positions) + 1)}
+        if unknown:
+            raise ValueError(f"Unknown Gammex 467 reference ROI(s): {', '.join(sorted(unknown))}")
+        guide_radius = 5.0
         rois = {}
+        guide_statistics = {}
         for number, (angle, distance) in enumerate(positions, start=1):
             radians = math.radians(angle or 0)
             location = (
@@ -1088,6 +1137,10 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
                 center[1] + distance * math.sin(radians) / spacing[0],
             )
             values = self._disk_values(array, location, radius, spacing)
+            name = f"ROI {number}"
+            guide_statistics[name] = self._statistics(
+                self._disk_values(array, location, guide_radius, spacing)
+            )
             statistics = self._statistics(values)
             shifts = self._placement_samples(array, location, radius, spacing)
             medians = [sample.median for sample in shifts]
@@ -1105,7 +1158,7 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
                     ]
                 )
                 sphere = self._statistics(sphere_values)
-            rois[f"ROI {number}"] = ACRCT467ROI(
+            rois[name] = ACRCT467ROI(
                 **statistics.model_dump(),
                 center_px=location,
                 angle_deg=angle,
@@ -1140,10 +1193,23 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
             for index, item in enumerate(metadata)
         ]
         value_units = "HU" if all(unit == "HU" for unit in rescale_types) else "RESCALED"
+        checks = {}
+        for name, reference in references.items():
+            difference = (
+                guide_statistics[name].mean - reference.expected_hu if value_units == "HU" else None
+            )
+            checks[name] = ACRCT467CTNumberCheck(
+                reference=reference,
+                difference_hu=difference,
+                passed=abs(difference) <= reference.tolerance_hu if difference is not None else None,
+            )
+        passed = None
+        if checks and value_units == "HU":
+            passed = all(check.passed is True for check in checks.values())
         limitations = [
-            "ROI numbering describes geometry, not material identity or certified density.",
+            "ROI numbering describes geometry. Rod identities must be confirmed independently.",
             "Disks use nominal layout coordinates; boundary evidence is reported separately when visible.",
-            "No density calibration, acceptance limits, or 464 module measurements are inferred.",
+            "The Model 467 guide specifies nominal references, not acceptance limits. No 464 module tests are inferred.",
             "Slice profiles sample fixed coordinates even on planes without a complete phantom outline.",
         ]
         if value_units != "HU":
@@ -1170,6 +1236,12 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
             sphere_slice_indices=sphere_indices,
             sphere_unavailable_reason=sphere_reason,
             limitations=limitations,
+            guide_measurements=ACRCT467GuideMeasurements(
+                rod_sample_diameter_mm=2 * guide_radius,
+                rod_statistics=guide_statistics,
+                ct_number_checks=checks,
+                ct_number_passed=passed,
+            ),
         )
 
     def results(self) -> str:
@@ -1217,16 +1289,7 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
         )
         for name, roi in result.rois.items():
             color = self._roi_color(roi)
-            axis.add_patch(
-                Ellipse(
-                    roi.center_px,
-                    width=2 * roi.radius_mm / column_mm,
-                    height=2 * roi.radius_mm / row_mm,
-                    fill=False,
-                    edgecolor=color,
-                    linewidth=1.5,
-                )
-            )
+            self._draw_sampling_disk(axis, roi, result.pixel_spacing_mm)
             axis.annotate(
                 name.removeprefix("ROI "),
                 roi.center_px,
@@ -1308,22 +1371,43 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
             plt.show()
         return fig
 
-    def publish_pdf(self, filename: str | Path | BytesIO) -> None:
-        """Save a PDF summary with the numbered overlay and slice profiles."""
-        summary = self.results()
+    def publish_pdf(
+        self,
+        filename: str | Path | BytesIO,
+        *,
+        detailed: bool = True,
+        logo: Path | str | None = None,
+    ) -> None:
+        """Save a detailed report or a QA summary, both with analysis figures.
+
+        Parameters
+        ----------
+        filename : str, Path, or BytesIO
+            Report destination.
+        detailed : bool
+            Include all measurement tables. Both modes include the analysis figures.
+        logo : Path, str, or None
+            Optional logo image for the Pro-ART page header. If omitted, the
+            report displays the brand name as text in the logo position.
+        """
+        result = self.results_data()
+        assert isinstance(result, ACRCT467Result)
         destination = str(filename) if isinstance(filename, Path) else filename
-        canvas = pdf.PylinacCanvas(destination, page_title="Gammex 467 Analysis")
-        canvas.add_text(summary.splitlines(), location=(1.5, 25), font="Courier", font_size=9)
-        for plot in (self.plot_analyzed_image, self.plot_slice_profiles):
-            figure = plot(show=False)
-            try:
-                stream = BytesIO()
-                figure.savefig(stream, format="png", dpi=160)
-                canvas.add_new_page()
-                canvas.add_image(stream, location=(1, 5), dimensions=(19, 19))
-            finally:
-                plt.close(figure)
-        canvas.finish()
+        _write_report(
+            destination, result, _report_figures(self, result), detailed=detailed, logo=logo,
+        )
+
+    def publish_json(self, filename: str | Path) -> None:
+        """Save the QA checklist and grouped full-precision measurements as JSON.
+
+        Parameters
+        ----------
+        filename : str or Path
+            Report destination. The raw :meth:`results_data` structure is unchanged.
+        """
+        result = self.results_data()
+        assert isinstance(result, ACRCT467Result)
+        Path(filename).write_text(_json_report(result), encoding="utf-8", newline="\n")
 
     def _generate_results_data(self) -> ACRCT467Result:
         if self._result is None:
@@ -1333,6 +1417,22 @@ class ACRCT467(ResultsDataMixin[ACRCT467Result]):
     @staticmethod
     def _roi_color(roi: ACRCT467ROI) -> str:
         return "deepskyblue" if roi.boundary is not None else "gold"
+
+    @classmethod
+    def _draw_sampling_disk(
+        cls, axis: plt.Axes, roi: ACRCT467ROI, spacing: tuple[float, float]
+    ) -> None:
+        row_mm, column_mm = spacing
+        axis.add_patch(
+            Ellipse(
+                roi.center_px,
+                width=2 * roi.radius_mm / column_mm,
+                height=2 * roi.radius_mm / row_mm,
+                fill=False,
+                edgecolor=cls._roi_color(roi),
+                linewidth=1.5,
+            )
+        )
 
     @staticmethod
     def _overlay_window(result: ACRCT467Result) -> tuple[float, float]:
