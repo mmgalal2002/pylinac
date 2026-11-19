@@ -16,7 +16,7 @@ Overview
     If you'd like to submit data, enter it `here <https://forms.gle/RBR5ubFvjogE9iC67>`_.
 
 The ACR module provides routines for automatically
-analyzing DICOM images of the ACR CT 464 phantom and Large and Medium MR phantoms.
+analyzing DICOM images of the ACR CT 464, Gammex 467, and Large and Medium MR phantoms.
 It can load a folder or zip file of images, correcting for
 translational and rotational offsets.
 
@@ -93,6 +93,55 @@ And then load, analyze, and view the results:
     ct.save_images()
     # finally, save a PDF
     ct.publish_pdf()
+
+Gammex 467 CT
+-------------
+
+Use :class:`~pylinac.acr.ACRCT467` for the Gammex 467 insert phantom. The
+464-specific :class:`~pylinac.acr.ACRCT` analyzes different structures and
+should not be used on these images.
+
+.. code-block:: python
+
+    from pathlib import Path
+
+    from pylinac import ACRCT467
+
+    phantom = ACRCT467.from_zip("467-series.zip")
+    phantom.analyze()
+    print(phantom.results())
+    Path("467-results.json").write_text(
+        phantom.results_data(as_json=True), encoding="utf-8"
+    )
+    phantom.publish_pdf("467-summary.pdf")
+
+Load a DICOM directory with ``ACRCT467(path)``. Use one aligned axial CT series
+per analysis. By default the analyzer uses the middle slice with a complete
+phantom outline and the brightest insert on the inner ring as the angular
+reference. To override these, pass a zero-based ``origin_slice`` and/or
+``reference_angle_deg`` to ``analyze()``. The angle increases clockwise from the
+right side of the image.
+
+ROI 1 is the center. ROIs 2 through 9 are on the 55 mm ring; ROIs 10 through 17
+are on the 105 mm ring, offset by 22.5 degrees. Each disk is 20 mm in diameter.
+The numbered overlay in the PDF distinguishes visible threshold boundaries
+from regions placed by layout alone. Both use the same nominal disk positions.
+
+The detailed JSON includes:
+
+- Disk statistics and histograms, 20 mm diameter sphere statistics where the
+  complete sphere is covered by a gap-free stack, and nine placement samples
+  per disk (shifts of -1, 0, and +1 mm independently along each image axis).
+- Signed intensity differences and CNR for each unique pair of disks. CNR uses
+  the absolute difference divided by the root-mean-square of the two population
+  standard deviations. CNR is unavailable if both disks have zero noise.
+- Selected acquisition metadata, image geometry, and statistics at the same
+  disk coordinates on every slice. Slices without a complete phantom outline
+  are marked; their values are not insert measurements.
+
+``RESCALED`` denotes pixel values to which the DICOM rescale transform was
+applied but for which not every slice explicitly declares HU. The scan does not
+establish material assignments, certified densities, or pass/fail limits.
 
 .. _choosing-mr-echo-number:
 
@@ -650,6 +699,11 @@ API Documentation
 .. autopydantic_model:: pylinac.acr.SpatialResolutionModuleOutput
 
 .. autopydantic_model:: pylinac.acr.LowContrastModuleOutput
+
+.. autoclass:: pylinac.acr.ACRCT467
+  :members:
+
+.. autopydantic_model:: pylinac.acr.ACRCT467Result
 
 .. autoclass:: pylinac.acr.ACRMRILarge
     :inherited-members:
